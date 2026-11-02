@@ -1,0 +1,32 @@
+id: c2272b0b-4cf1-44de-8b6c-b89030526a2a
+name: publish-extensions
+description: Push both extensions to the swamp registry after a manual approval. Run verify-extensions first.
+tags: {}
+jobs:
+  - name: publish
+    steps:
+      - name: approve-push
+        task: { type: manual_approval, prompt: "Push @jpisgeek/herdr-swamp-fixtures and @jpisgeek/herdr-swamp-layout to swamp-club.com? This publishes publicly. Unresolved: adversarial-review report not recorded; behavior-spelling needs a recent swamp client.", timeout: 86400 }
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: push-fixtures
+        task:
+          type: model_method
+          modelIdOrName: ext-cli
+          methodName: execute
+          inputs: { run: "swamp extension push fixtures/manifest.yaml --yes" }
+        dependsOn:
+          - { step: approve-push, condition: { type: succeeded } }
+        weight: 0
+        allowFailure: false
+      - name: push-layout
+        task:
+          type: model_method
+          modelIdOrName: ext-cli
+          methodName: execute
+          inputs: { run: "swamp extension push layout/manifest.yaml --yes" }
+        dependsOn:
+          - { step: approve-push, condition: { type: succeeded } }
+        weight: 0
+        allowFailure: false

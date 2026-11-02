@@ -1,0 +1,17 @@
+manifestVersion: 1
+name: "@jpisgeek/herdr-swamp-fixtures"
+version: "2026.11.02.1"
+license: MIT
+description: "Harmless test workflows (a manual approval gate and a slow failing step) for trying out a swamp dashboard such as the Herdr swamp layout."
+repository: "https://github.com/jpisgeek/swamp-herdr-extensions"
+paths:
+  base: manifest
+workflows:
+  - workflows/workflow-gate-test.yaml
+  - workflows/workflow-fail-test.yaml
+additionalFiles:
+  - README.md
+  - LICENSE
+labels:
+  - herdr
+  - testing

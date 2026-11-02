@@ -1,0 +1,8 @@
+type: command/shell
+typeVersion: 2026.02.09.1
+id: e65424d5-af3b-448e-a7c9-e0a072db2b1c
+name: ext-cli
+version: 1
+tags: {}
+globalArguments: {}
+methods: {}

@@ -1,0 +1,19 @@
+id: d8ce3c8c-0bae-41a6-a6f3-08d4bc587fdc
+name: "@jpisgeek/fail-test"
+description: Runs for some seconds, then fails. Changes nothing.
+tags: {}
+inputs:
+  properties:
+    seconds: { type: integer, default: 30 }
+jobs:
+  - name: main
+    steps:
+      - name: slow-fail
+        task:
+          type: model_method
+          modelIdOrName: herdr-test
+          methodName: execute
+          inputs: { run: "echo start; sleep ${{ inputs.seconds }}; exit 3" }
+        dependsOn: []
+        weight: 0
+        allowFailure: false

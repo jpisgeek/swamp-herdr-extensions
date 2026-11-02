@@ -1,0 +1,75 @@
+id: edc8db8b-77ca-43b4-abab-f72306efbd30
+name: verify-extensions
+description: Format check, tests, quality score and push dry-run for both extensions. Pushes nothing.
+tags: {}
+jobs:
+  - name: verify
+    steps:
+      - name: fixtures-fmt
+        task:
+          type: model_method
+          modelIdOrName: ext-cli
+          methodName: execute
+          inputs: { run: "swamp extension fmt fixtures/manifest.yaml --check" }
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: layout-fmt
+        task:
+          type: model_method
+          modelIdOrName: ext-cli
+          methodName: execute
+          inputs: { run: "swamp extension fmt layout/manifest.yaml --check" }
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: layout-test
+        task:
+          type: model_method
+          modelIdOrName: ext-cli
+          methodName: execute
+          inputs: { run: "$HOME/.swamp/deno/deno test --allow-all layout/extensions/herdr_swamp_layout_test.ts" }
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: fixtures-quality
+        task:
+          type: model_method
+          modelIdOrName: ext-cli
+          methodName: execute
+          inputs: { run: "swamp extension quality fixtures/manifest.yaml" }
+        dependsOn:
+          - { step: fixtures-fmt, condition: { type: succeeded } }
+        weight: 0
+        allowFailure: false
+      - name: layout-quality
+        task:
+          type: model_method
+          modelIdOrName: ext-cli
+          methodName: execute
+          inputs: { run: "swamp extension quality layout/manifest.yaml" }
+        dependsOn:
+          - { step: layout-fmt, condition: { type: succeeded } }
+          - { step: layout-test, condition: { type: succeeded } }
+        weight: 0
+        allowFailure: false
+      - name: fixtures-dry-run
+        task:
+          type: model_method
+          modelIdOrName: ext-cli
+          methodName: execute
+          inputs: { run: "swamp extension push fixtures/manifest.yaml --dry-run --yes" }
+        dependsOn:
+          - { step: fixtures-quality, condition: { type: succeeded } }
+        weight: 0
+        allowFailure: false
+      - name: layout-dry-run
+        task:
+          type: model_method
+          modelIdOrName: ext-cli
+          methodName: execute
+          inputs: { run: "swamp extension push layout/manifest.yaml --dry-run --yes" }
+        dependsOn:
+          - { step: layout-quality, condition: { type: succeeded } }
+        weight: 0
+        allowFailure: false

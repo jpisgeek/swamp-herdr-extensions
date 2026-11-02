@@ -1,0 +1,35 @@
+manifestVersion: 1
+name: "@jpisgeek/herdr-swamp-layout"
+version: "2026.11.02.1"
+license: MIT
+description: "Installs the Herdr swamp layout: approvals, runs and quick-run panels for the swamp CLI, inside the Herdr desktop app."
+repository: "https://github.com/jpisgeek/herdr-swamp-layout"
+paths:
+  base: manifest
+behaviors:
+  - extensions/herdr_swamp_layout.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+  - layouts/swamp.json
+  - themes/swamp-club.json
+  - mods/swamp-approvals/mod.json
+  - mods/swamp-runs/mod.json
+  - mods/swamp-quickrun/mod.json
+  - mods/swamp-tabs/mod.json
+  - mods/swamp-status/mod.json
+  - mods/swamp-tabs/fonts/OFL.txt
+binaries:
+  - layouts/swamp.svg
+  - mods/swamp-approvals/main.js
+  - mods/swamp-runs/main.js
+  - mods/swamp-quickrun/main.js
+  - mods/swamp-tabs/main.js
+  - mods/swamp-status/main.js
+  - mods/swamp-tabs/fonts/ChakraPetch-Regular.ttf
+  - mods/swamp-tabs/fonts/ChakraPetch-Medium.ttf
+  - mods/swamp-tabs/fonts/ChakraPetch-SemiBold.ttf
+  - mods/swamp-tabs/fonts/ChakraPetch-Bold.ttf
+labels:
+  - herdr
+  - dashboard

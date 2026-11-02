@@ -1,0 +1,12 @@
+id: 54b2d5a3-536b-48c5-ac4d-f86909dea946
+name: "@jpisgeek/gate-test"
+description: Test gate. Does nothing.
+tags: {}
+jobs:
+  - name: main
+    steps:
+      - name: check-it
+        task: { type: manual_approval, prompt: "Test gate", timeout: 86400 }
+        dependsOn: []
+        weight: 0
+        allowFailure: false
