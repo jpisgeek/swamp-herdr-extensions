@@ -1,0 +1,57 @@
+{
+  "layouts/swamp.json": [
+    "834db1495e083bdff5ab6546e7ec763aee5604e68742d7a2aa4cc50d4e309300"
+  ],
+  "layouts/swamp.svg": [
+    "be489ab9fbf9d1c61c53cc94b3d22f918260309d1feb6b401c8c02ac8337ed2d"
+  ],
+  "themes/swamp-club.json": [
+    "fe6a08d38685e6908e406b0089fc174088c926d0e6e823470afe15627102b8ab"
+  ],
+  "mods/swamp-approvals/main.js": [
+    "197b5a5f5c5126c1de0b74cf78e8d8803c1dcbb0bbe3e4b64d9c2674e83fc78e"
+  ],
+  "mods/swamp-approvals/mod.json": [
+    "8ef733df79f0652b51de492ed631a723d99d45d2f5e4b817a13b81e29780a6fd"
+  ],
+  "mods/swamp-runs/main.js": [
+    "a2bd4c7cbb212d4649e60cf22189905f1af4db3dd1995cd1571a82ff850264bf",
+    "02e743095f8b3bfd096b79f45b8720f62cb7fbe64af7b672203a01ffd148a2bf"
+  ],
+  "mods/swamp-runs/mod.json": [
+    "58ef74112877aebd7a3e19135d17c1caf1f1fa5490cea2dc32412a8f0b587f31"
+  ],
+  "mods/swamp-quickrun/main.js": [
+    "a7c3246826a4a56bf2136e578c58319c2fe282463f14bdb66b65cbeab2a45177"
+  ],
+  "mods/swamp-quickrun/mod.json": [
+    "5548088a0259a9f539a1273d577f5c7bee80c82a888b4020334726edcdd61fc7"
+  ],
+  "mods/swamp-tabs/main.js": [
+    "33c942f48010f43798215a9d81ea600607b6205453c37e4ba213cad17550b8ea"
+  ],
+  "mods/swamp-tabs/mod.json": [
+    "4a77bacbec45243301525c9a276295d93f48687d6ef283e9673c489d4ecaf1a1"
+  ],
+  "mods/swamp-tabs/fonts/ChakraPetch-Regular.ttf": [
+    "98fcd638baa5c81ff0316b7538ce330ee3b23b1302726de3526d5933a8ecf986"
+  ],
+  "mods/swamp-tabs/fonts/ChakraPetch-Medium.ttf": [
+    "d480f4f97405fac3600652e2e14fd0b14339031c0af4da11582994878f04d919"
+  ],
+  "mods/swamp-tabs/fonts/ChakraPetch-SemiBold.ttf": [
+    "45264de3204ddbd5fb3e14a2402acd5c630d16650ae5fc221d2c52da46a6734b"
+  ],
+  "mods/swamp-tabs/fonts/ChakraPetch-Bold.ttf": [
+    "65fbf76d95651697275e19db4d717c0e95a789ddd3476478b05292104db278a0"
+  ],
+  "mods/swamp-tabs/fonts/OFL.txt": [
+    "13831d02389d917d22fcfa6c79f98f8acbf61d230add0e73a4d4dc5f3bfb9e56"
+  ],
+  "mods/swamp-status/main.js": [
+    "aeb881324839e1b0fdd61902f1be7834d8f2bf8f235bfd5a612319aaa2cb8e92"
+  ],
+  "mods/swamp-status/mod.json": [
+    "a45c46e5e70266535aadd839b45135360e1c3c12636bb957a143bdf5b2c9c511"
+  ]
+}

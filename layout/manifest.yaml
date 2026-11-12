@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@jpisgeek/herdr-swamp-layout"
-version: "2026.11.02.1"
+version: "2026.11.12.2"
 license: MIT
 description: "Installs the Herdr swamp layout: approvals, runs and quick-run panels for the swamp CLI, inside the Herdr desktop app."
 repository: "https://github.com/jpisgeek/herdr-swamp-layout"
@@ -9,6 +9,7 @@ paths:
 behaviors:
   - extensions/herdr_swamp_layout.ts
 additionalFiles:
+  - extensions/legacy-hashes.json
   - README.md
   - LICENSE
   - layouts/swamp.json
