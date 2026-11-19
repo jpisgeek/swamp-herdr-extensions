@@ -1,6 +1,6 @@
 # @jpisgeek/herdr-swamp-layout
 
-Installs the [Herdr swamp layout](https://github.com/jpisgeek/herdr-swamp-layout)
+Installs the [Herdr swamp layout](https://github.com/jpisgeek/swamp-herdr-extensions/tree/main/layout)
 into the Herdr desktop app: approvals, runs and quick-run panels for the swamp
 CLI, a filterable go-to popup, on-demand stats, a status item, and the swamp-club theme.
 

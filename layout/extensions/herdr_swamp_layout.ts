@@ -1,4 +1,4 @@
-import { z } from "npm:zod@4.6.7";
+import { z } from "npm:zod@4";
 
 /** Files the extension bundles, relative to the extension root and to the Herdr home. */
 const FILES: readonly string[] = [
@@ -35,7 +35,7 @@ const Receipt = z.object({
   at: z.string(),
 });
 import LEGACY from "./legacy-hashes.json" with { type: "json" };
-const VERSION = "2026.11.19.1";
+const VERSION = "2026.11.19.2";
 const STATE = ".swamp-layout-state.json";
 const BACKUP = ".swamp-layout-backup";
 type State = { version: string; hashes: Record<string, string> };
@@ -297,11 +297,16 @@ async function apply(action: "install" | "upgrade" | "rollback", context: Ctx) {
 }
 export const model = {
   type: "@jpisgeek/herdr-swamp-layout",
-  version: "2026.11.19.1",
+  version: "2026.11.19.2",
   globalArguments: GlobalArgsSchema,
   upgrades: [{
     toVersion: "2026.11.19.1",
     description: "Add go-to and stats panels; global arguments are unchanged",
+    upgradeAttributes: (old: Record<string, unknown>) => old,
+  }, {
+    toVersion: "2026.11.19.2",
+    description:
+      "Refresh public docs and runtime Zod; global arguments are unchanged",
     upgradeAttributes: (old: Record<string, unknown>) => old,
   }],
   resources: {
