@@ -1,0 +1,27 @@
+manifestVersion: 1
+name: "@jpisgeek/rex-herdr"
+version: "2026.11.19.1"
+license: MIT
+description: "Adds herdr-core and swamp to the Rex terminal's command palette: pick and attach any herdr-core terminal or agent on any machine, start agents that outlive Rex, and work swamp approvals, runs and workflows in a floating pane."
+repository: "https://github.com/jpisgeek/swamp-herdr-extensions"
+paths:
+  base: manifest
+models:
+  - extensions/rex_herdr.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+  - THIRD_PARTY_NOTICES.md
+binaries:
+  - rex/rex_herdr.lua
+  - rex/rex-herdr-swamp
+  - rex/swamp-club
+platforms:
+  - darwin-aarch64
+  - darwin-x86_64
+  - linux-x86_64
+  - linux-aarch64
+labels:
+  - rex
+  - herdr
+  - terminal

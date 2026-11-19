@@ -1,0 +1,178 @@
+#!/bin/sh
+# rex-herdr-swamp: swamp approvals, runs and workflows in a Rex pane.
+# Installed by the @jpisgeek/rex-herdr swamp extension; Rex's palette runs it.
+#
+# Usage: rex-herdr-swamp approvals | runs | workflows | stats
+#
+# Runs in the current folder and finds the swamp repo by walking up to the
+# nearest .swamp.yaml. Anything that changes a run asks you to type "yes".
+# Needs jq (macOS ships /usr/bin/jq).
+set -u
+
+SWAMP=${SWAMP:-swamp}
+command -v "$SWAMP" >/dev/null 2>&1 || SWAMP="$HOME/.local/bin/swamp"
+
+pause() {
+  printf '\nPress Enter to close. '
+  read -r _ || true
+}
+
+die() {
+  printf '%s\n' "$*" >&2
+  pause
+  exit 1
+}
+
+# Prints the nearest folder at or above $PWD that holds .swamp.yaml.
+find_repo() {
+  d=$PWD
+  while :; do
+    [ -f "$d/.swamp.yaml" ] && { printf '%s\n' "$d"; return 0; }
+    [ "$d" = "/" ] && return 1
+    d=$(dirname "$d")
+  done
+}
+
+# Reads a whole number from 1 to $1 into $pick. Empty input returns 1.
+ask_number() {
+  printf '\nNumber (Enter to close): '
+  read -r pick || return 1
+  [ -n "$pick" ] || return 1
+  case $pick in *[!0-9]*) die "Not a number: $pick" ;; esac
+  [ "$pick" -ge 1 ] && [ "$pick" -le "$1" ] || die "Out of range: $pick"
+}
+
+# Asks to type yes. Returns 0 only for "yes".
+confirm() {
+  printf '%s Type yes: ' "$1"
+  read -r answer || return 1
+  [ "$answer" = "yes" ]
+}
+
+approvals() {
+  json=$("$SWAMP" workflow approvals --json) || die "swamp workflow approvals failed."
+  n=$(printf '%s' "$json" | jq '.approvals | length')
+  if [ "$n" -eq 0 ]; then
+    echo "No approvals waiting."
+    pause
+    return
+  fi
+  printf '%s' "$json" | jq -r '.approvals | to_entries[] |
+    "\(.key + 1)) \(.value.workflowName) / \(.value.stepName)   run \(.value.runId)"'
+  ask_number "$n" || return
+  row=$(printf '%s' "$json" | jq -r --argjson i "$pick" \
+    '.approvals[$i - 1] | [.workflowName, .stepName, .runId] | @tsv')
+  wf=$(printf '%s' "$row" | cut -f1)
+  step=$(printf '%s' "$row" | cut -f2)
+  run=$(printf '%s' "$row" | cut -f3)
+  printf '\n%s / %s\na) approve   r) reject   Enter) leave it: ' "$wf" "$step"
+  read -r act || return
+  case $act in
+    a) verb=approve reason="Approved in Rex" ;;
+    r) verb=reject reason="Rejected in Rex" ;;
+    *) return ;;
+  esac
+  confirm "$verb $wf / $step (run $run)?" || { echo "Nothing changed."; pause; return; }
+  "$SWAMP" workflow "$verb" "$wf" "$step" --run "$run" --reason "$reason" ||
+    die "swamp workflow $verb failed."
+  if [ "$verb" = approve ] && confirm "Resume run $run now?"; then
+    "$SWAMP" workflow resume "$wf" --run "$run"
+  fi
+  pause
+}
+
+# Whether swamp serve runs on this machine. Reads only; never starts it.
+serve_state() {
+  d=$("$SWAMP" serve daemon status --json 2>/dev/null) || d='{}'
+  if [ "$(printf '%s' "$d" | jq -r '.running // false')" = true ]; then
+    echo "serve: running as a daemon"
+  elif pids=$(pgrep -f 'swamp serve' 2>/dev/null) && [ -n "$pids" ]; then
+    echo "serve: running in a terminal (pid $(printf '%s' "$pids" | tr '\n' ' '))"
+  elif [ "$(printf '%s' "$d" | jq -r '.enabled // false')" = true ]; then
+    echo "serve: daemon enabled, not running"
+  else
+    echo "serve: off"
+  fi
+}
+
+# The same digest as Herdr's Swamp stats window, for one window (7d, 30d).
+stats_digest() {
+  # Capture first: in a pipe, the exit status would be jq's, not swamp's.
+  json=$("$SWAMP" summarise --since "$1" --limit 20 --json) || return 1
+  printf '%s' "$json" | jq -r --arg w "$1" '
+    def pct(ok; total): if total > 0 then "\((ok * 100 / total) | round)% ok" else "" end;
+    def short: if test("^[0-9a-f]{8}-[0-9a-f]{4}-") then .[0:8] else . end;
+    def median: sort | if length == 0 then null elif length % 2 == 1 then .[length / 2 | floor] else (.[length / 2 - 1] + .[length / 2]) / 2 end;
+    def dur: if . == null then "" elif . < 1000 then "median \(. | round) ms" elif . < 60000 then "median \(. / 100 | round / 10) s" else "median \(. / 60000 | round) min" end;
+    def ms: ((.[0:19] + "Z") | fromdateiso8601) * 1000 + ((capture("\\.(?<f>[0-9]+)Z$").f // "0") + "00" | .[0:3] | tonumber);
+    if .message then "No activity in the last \($w)." else
+      ([.workflows[]?]) as $wf | ([.methodExecutions[]?]) as $mx |
+      ([$mx[] | .modelName as $n | .methods[]? | . + {modelName: $n}]) as $m |
+      "Last \($w)",
+      (if ($wf | length) > 0 then
+        "  workflows  \([$wf[].total] | add) runs · \(pct([$wf[].succeeded] | add; [$wf[].total] | add))  \([$wf[].runs[]? | select(.completedAt) | (.completedAt | ms) - (.startedAt | ms)] | median | dur)"
+       else empty end),
+      (if ($mx | length) > 0 then
+        "  methods    \([$mx[].total] | add) runs · \(pct([$mx[].succeeded] | add; [$mx[].total] | add))  \([$m[].runs[]?.durationMs | select(. != null)] | median | dur)"
+       else empty end),
+      (if (.data.totalItems // 0) > 0 then "  data       \(.data.totalItems) items · \(.data.totalVersions) versions" else empty end),
+      ([($wf[] | select(.failed > 0) | {n: .workflowName, f: .failed, t: .total}),
+        ($m[] | select(.failed > 0) | {n: "\(.modelName | short) \(.method)", f: .failed, t: .total})]
+       | sort_by(-.f) | .[0:3]) as $fail |
+      (if ($fail | length) > 0 then "  most failures:", ($fail[] | "    ✗ \(.n)  \(.f) of \(.t)") else empty end)
+    end'
+}
+
+stats() {
+  serve_state
+  echo
+  stats_digest 7d || die "swamp summarise failed."
+  printf '\n3) last 30 days   Enter) close: '
+  read -r more || return
+  if [ "$more" = 3 ]; then
+    echo
+    stats_digest 30d || die "swamp summarise failed."
+    pause
+  fi
+}
+
+runs() {
+  "$SWAMP" run history || die "swamp run history failed."
+  pause
+}
+
+workflows() {
+  json=$("$SWAMP" workflow search --json) || die "swamp workflow search failed."
+  n=$(printf '%s' "$json" | jq '.results | length')
+  [ "$n" -gt 0 ] || die "No workflows in this repo."
+  printf '%s' "$json" | jq -r '.results | to_entries[] |
+    "\(.key + 1)) \(.value.name)\(if .value.hasInputs then " [inputs]" else "" end)  \(.value.description // "")"'
+  ask_number "$n" || return
+  name=$(printf '%s' "$json" | jq -r --argjson i "$pick" '.results[$i - 1].name')
+  has_inputs=$(printf '%s' "$json" | jq -r --argjson i "$pick" '.results[$i - 1].hasInputs')
+  set -- workflow run "$name"
+  if [ "$has_inputs" = true ]; then
+    printf '\nInputs as JSON, for example {"branch":"main"} (Enter for none): '
+    read -r inputs || return
+    if [ -n "$inputs" ]; then
+      printf '%s' "$inputs" | jq -e 'type == "object"' >/dev/null 2>&1 || die "Not a JSON object: $inputs"
+      set -- "$@" --input "$inputs"
+    fi
+  fi
+  confirm "Run $name?" || { echo "Nothing ran."; pause; return; }
+  "$SWAMP" "$@"
+  pause
+}
+
+command -v jq >/dev/null 2>&1 || die "rex-herdr-swamp needs jq."
+repo=$(find_repo) || die "No swamp repo here: no .swamp.yaml in $PWD or above."
+cd "$repo" || die "Cannot enter $repo"
+printf 'swamp repo: %s\n\n' "$repo"
+
+case ${1:-} in
+  approvals) approvals ;;
+  runs) runs ;;
+  workflows) workflows ;;
+  stats) stats ;;
+  *) die "Usage: rex-herdr-swamp approvals | runs | workflows | stats" ;;
+esac
