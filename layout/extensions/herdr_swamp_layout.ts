@@ -1,4 +1,4 @@
-import { z } from "npm:zod@4";
+import { z } from "npm:zod@4.6.7";
 
 /** Files the extension bundles, relative to the extension root and to the Herdr home. */
 const FILES: readonly string[] = [
@@ -20,6 +20,10 @@ const FILES: readonly string[] = [
   "mods/swamp-tabs/fonts/OFL.txt",
   "mods/swamp-status/main.js",
   "mods/swamp-status/mod.json",
+  "mods/swamp-goto/main.js",
+  "mods/swamp-goto/mod.json",
+  "mods/swamp-stats/main.js",
+  "mods/swamp-stats/mod.json",
 ];
 
 const GlobalArgsSchema = z.object({ herdrHome: z.string().optional() });
@@ -31,7 +35,7 @@ const Receipt = z.object({
   at: z.string(),
 });
 import LEGACY from "./legacy-hashes.json" with { type: "json" };
-const VERSION = "2026.11.12.2";
+const VERSION = "2026.11.19.1";
 const STATE = ".swamp-layout-state.json";
 const BACKUP = ".swamp-layout-backup";
 type State = { version: string; hashes: Record<string, string> };
@@ -177,8 +181,11 @@ async function apply(action: "install" | "upgrade" | "rollback", context: Ctx) {
           throw new Error(`Install refuses overwrite: ${rel}`);
         }
         if (action === "upgrade" && oldHash !== hashes[rel]) {
-          const known = state ? state.hashes[rel] === oldHash : oldHash &&
-            (LEGACY as Record<string, string[]>)[rel]?.includes(oldHash);
+          const known = state
+            ? (state.hashes[rel] ?? null) === oldHash
+            : oldHash === null
+            ? !(rel in LEGACY)
+            : (LEGACY as Record<string, string[]>)[rel]?.includes(oldHash);
           if (!known) {
             throw new Error(
               `Local edit or unknown installation: ${rel}. No files changed. Merge it explicitly before retrying.`,
@@ -288,10 +295,15 @@ async function apply(action: "install" | "upgrade" | "rollback", context: Ctx) {
     await Deno.remove(`${home}/.swamp-layout-lock`);
   }
 }
-export const behavior = {
+export const model = {
   type: "@jpisgeek/herdr-swamp-layout",
-  version: "2026.11.12.2",
+  version: "2026.11.19.1",
   globalArguments: GlobalArgsSchema,
+  upgrades: [{
+    toVersion: "2026.11.19.1",
+    description: "Add go-to and stats panels; global arguments are unchanged",
+    upgradeAttributes: (old: Record<string, unknown>) => old,
+  }],
   resources: {
     install: {
       description: "Layout change receipt",

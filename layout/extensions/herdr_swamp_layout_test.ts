@@ -1,4 +1,4 @@
-import { behavior } from "./herdr_swamp_layout.ts";
+import { model as behavior } from "./herdr_swamp_layout.ts";
 
 type Ctx = Parameters<typeof behavior.methods.install.execute>[1];
 
@@ -33,6 +33,10 @@ async function makeSource(): Promise<string> {
     "mods/swamp-tabs/fonts/OFL.txt",
     "mods/swamp-status/main.js",
     "mods/swamp-status/mod.json",
+    "mods/swamp-goto/main.js",
+    "mods/swamp-goto/mod.json",
+    "mods/swamp-stats/main.js",
+    "mods/swamp-stats/mod.json",
   ];
   for (const f of files) {
     await Deno.mkdir(`${src}/${f.slice(0, f.lastIndexOf("/"))}`, {
@@ -49,6 +53,44 @@ Deno.test("install copies every file into the Herdr home", async () => {
   await behavior.methods.install.execute({}, ctx(home, src));
   const copied = await Deno.readTextFile(`${home}/layouts/swamp.json`);
   if (copied !== "file layouts/swamp.json") throw new Error("not copied");
+});
+
+Deno.test("upgrade adds new panels to an older managed install and rollback removes only those additions", async () => {
+  const src = await makeSource();
+  const home = await Deno.realPath(await Deno.makeTempDir());
+  const context = ctx(home, src);
+  try {
+    await behavior.methods.install.execute({}, context);
+    const statePath = `${home}/.swamp-layout-state.json`;
+    const state = JSON.parse(await Deno.readTextFile(statePath));
+    for (const mod of ["swamp-goto", "swamp-stats"]) {
+      for (const file of ["main.js", "mod.json"]) {
+        delete state.hashes[`mods/${mod}/${file}`];
+      }
+      await Deno.remove(`${home}/mods/${mod}`, { recursive: true });
+    }
+    state.version = "2026.11.12.2";
+    await Deno.writeTextFile(statePath, JSON.stringify(state));
+    await behavior.methods.upgrade.execute({}, context);
+    if (
+      await Deno.readTextFile(`${home}/mods/swamp-stats/main.js`) !==
+        "file mods/swamp-stats/main.js"
+    ) throw new Error("new panel missing");
+    await behavior.methods.rollback.execute({}, context);
+    try {
+      await Deno.stat(`${home}/mods/swamp-stats/main.js`);
+      throw new Error("rollback retained the new panel");
+    } catch (e) {
+      if (!(e instanceof Deno.errors.NotFound)) throw e;
+    }
+    if (
+      await Deno.readTextFile(`${home}/layouts/swamp.json`) !==
+        "file layouts/swamp.json"
+    ) throw new Error("rollback changed the original layout");
+  } finally {
+    await Deno.remove(src, { recursive: true });
+    await Deno.remove(home, { recursive: true });
+  }
 });
 
 Deno.test("install refuses to overwrite and copies nothing", async () => {

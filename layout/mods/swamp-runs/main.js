@@ -193,7 +193,7 @@ export default class SwampRuns extends View {
   async swampJson(repo, args) {
     const r = await exec(this.swamp, [...args, "--json"], { cwd: repo });
     const data = r.stdout.trim() ? parseJson(r.stdout) : null;
-    if (r.code !== 0 && !data) throw new Error((r.stderr || r.stdout).trim().split("\n").pop() || `exit ${r.code}`);
+    if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim().split("\n").pop() || `exit ${r.code}`);
     return data;
   }
 

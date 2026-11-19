@@ -2,7 +2,7 @@
 
 Installs the [Herdr swamp layout](https://github.com/jpisgeek/herdr-swamp-layout)
 into the Herdr desktop app: approvals, runs and quick-run panels for the swamp
-CLI, a status item, and the swamp-club theme.
+CLI, a filterable go-to popup, on-demand stats, a status item, and the swamp-club theme.
 
 ```sh
 swamp extension pull @jpisgeek/herdr-swamp-layout
@@ -13,7 +13,7 @@ swamp behavior run @jpisgeek/herdr-swamp-layout install herdr-swamp-layout
 Then check and switch:
 
 ```sh
-for m in swamp-approvals swamp-runs swamp-quickrun swamp-tabs swamp-status; do
+for m in swamp-approvals swamp-runs swamp-quickrun swamp-tabs swamp-status swamp-goto swamp-stats; do
   herdr-app check ~/.config/herdr-app/mods/$m
 done
 herdr-app do layout.switch '{"name":"swamp"}'
@@ -23,9 +23,9 @@ herdr-app do layout.switch '{"name":"swamp"}'
 anything. It targets `$HERDR_APP_HOME`, else `~/.config/herdr-app`; set
 `herdrHome` in the behavior's global arguments to override.
 
-The panels watch every open Herdr space whose folder has a `.swamp.yaml`. To
-watch a repo with no open space in the runs panel, use the local JSON setting
-below. Other panels retain their existing `REPOS` settings.
+The panels watch every local open Herdr space whose folder has a `.swamp.yaml`.
+Use the local JSON setting below to watch a local repo without an open space.
+Remote spaces are not silently read through matching local paths.
 
 The mods run programs (`swamp`, through `exec`) and read each watched repo's
 `.swamp.yaml`. They make no network requests. Every action that changes a run
@@ -50,10 +50,10 @@ editing the runs panel's JavaScript:
 {"repos":["~/projects/example-swamp-repo"]}
 ```
 
-The runs panel reads this file, adds layout-provided targets and open Swamp
-spaces, and removes duplicates. Missing or invalid JSON is treated as an empty
-list. This setting currently applies to the runs panel only; it does not change
-other panels' existing configuration. The file is personal data. Do not commit
+The panels read this file, add layout-provided targets and local open Swamp
+spaces, and remove duplicates. Missing or invalid JSON is treated as an empty
+list. Stats reads only when opened, refreshed or switched between 7 and 30 days;
+it never starts Swamp serve. The file is personal data. Do not commit
 it to a public repository.
 
 For an existing model named `herdr-swamp-layout`:

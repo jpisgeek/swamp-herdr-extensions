@@ -2,7 +2,8 @@
 // gate, in every watched swamp repo, and lets you approve, reject or resume
 // them. Every action asks for a second click (Confirm) before it runs.
 //
-// Watched repos: REPOS below, props.repos (if a layout gives it), and the
+// Watched repos: "repos" in ~/.config/herdr-app/swamp.json, REPOS below,
+// props.repos (if a layout gives it), and the
 // folder of any open space that has a .swamp.yaml.
 //
 // swamp facts this mod relies on (checked on swamp 20261102):
@@ -11,17 +12,32 @@
 //   the approvals list; `swamp workflow resume` continues it. So a suspended
 //   run with no open gate is shown under "Ready to resume".
 // - `reject` ends the run (status failed).
-// Resume can run for a long time and write to real systems, so it runs in a
-// terminal tab where you can see it, not hidden in the panel. Each run gets
-// one tab, "resume <workflow> <run id 8>": a run with several gates uses the
-// same tab again, so tabs do not pile up. While swamp still runs in that tab,
-// the card shows "Resuming in its tab" and no Resume button.
+// Approve & resume is one decision: after the last gate of a run is approved,
+// the panel resumes the run right away in a background herdr-core terminal
+// (`hc run --bg`, named "swamp-resume-<run id 8>", labelled swamp.run=<id>).
+// No tab opens. The card shows "Resuming…" with Watch, which peeks at the
+// terminal's output, and a notification says how it ended. herdr-core owns
+// the terminal, so the resume keeps going if Herdr closes. A run that is
+// approved but not resumed (approved elsewhere) shows Resume, which does the
+// same. Never start a second resume of a run.
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { closeOverlay, exec, hc, home, notify, panes, playSound, props, readTextFile, run, setShared, shared, spaces, theme } from "herdr";
+import { appHome, closeOverlay, exec, hc, home, notify, playSound, props, readTextFile, run, setShared, shared, spaces, terminals, theme } from "herdr";
 
-const REPOS = []; // extra swamp repos, e.g. ["~/git/my-swamp-repo"]; open spaces with a .swamp.yaml are added automatically
+const REPOS = []; // kept for older setups; prefer "repos" in ~/.config/herdr-app/swamp.json, which every swamp mod reads
+
+// Repos from ~/.config/herdr-app/swamp.json ({ "repos": ["~/git/my-repo"] }), or none.
+async function configuredRepos() {
+  const text = await readTextFile(appHome() + "/swamp.json").catch(() => null);
+  if (!text) return [];
+  try {
+    const repos = JSON.parse(text).repos;
+    return Array.isArray(repos) ? repos.filter((r) => typeof r === "string") : [];
+  } catch {
+    return [];
+  }
+}
 const POLL_MS = 20000;
 const SEEN_KEY = "swamp-approvals.seen";
 const COUNT_KEY = "swamp-approvals.count";
@@ -29,28 +45,13 @@ const COUNT_KEY = "swamp-approvals.count";
 const expand = (p) => (p.startsWith("~/") ? home() + p.slice(1) : p);
 const short = (p) => (p.startsWith(home()) ? "~" + p.slice(home().length) : p);
 const base = (p) => p.split("/").filter(Boolean).pop() ?? p;
-const shq = (a) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`);
-const RESUME_GRACE_MS = 60000; // after a Resume click, hide the button this long (status can lag)
-const resumeTabName = (workflowName, runId) => `resume ${workflowName} ${runId.slice(0, 8)}`;
+const RESUME_GRACE_MS = 15000; // after starting a resume, treat the run as resuming this long (hc can lag)
+const WATCH_MS = 3000; // how often to look at running resumes
+const resumeName = (runId) => `swamp-resume-${String(runId).slice(0, 8).toLowerCase()}`;
 
-// The run's resume tab, and its terminal pane, if the tab is open.
-function resumeTab(workflowName, runId) {
-  const name = resumeTabName(workflowName, runId);
-  for (const s of spaces()) {
-    if (s.machine) continue;
-    for (const t of s.tabs) {
-      if (t.name !== name) continue;
-      const pane = panes().find((p) => p.tab === t.id && p.terminal);
-      // A shell at its prompt means swamp has ended there; anything else still runs.
-      return { space: s.id, tab: t.id, pane, busy: Boolean(pane && !pane.program?.shell) };
-    }
-  }
-  return null;
-}
-
-function showTab(found) {
-  run("space.select", { id: found.space });
-  run("tab.select", { id: found.tab });
+// Live background resumes, from herdr-core's labels.
+function liveResumes() {
+  return terminals().filter((t) => t.labels?.["swamp.run"] && t.state === "live");
 }
 
 function ago(iso) {
@@ -81,9 +82,44 @@ export default class SwampApprovals extends View {
     this.pending = null; // { key, action } waiting for Confirm
     this.busy = null; // key of the item whose action runs now
     this.errors = {}; // item key -> message
-    this.resuming = {}; // runId -> time of the Resume click
+    this.resuming = {}; // runId -> time the resume was started
+    this.watching = {}; // terminal address -> { runId, workflowName }
+    // Adopt resumes started before this panel (re)loaded.
+    for (const t of liveResumes()) this.watching[t.address] = { runId: t.labels["swamp.run"], workflowName: t.labels["swamp.workflow"] ?? "workflow" };
     cx.timer.every(POLL_MS, (cx) => this.refresh(cx));
+    cx.timer.every(WATCH_MS, (cx) => this.checkResumes(cx));
     this.refresh(cx);
+  }
+
+  // Tells the person how each finished background resume ended.
+  checkResumes(cx) {
+    const addrs = Object.keys(this.watching);
+    if (!addrs.length) return;
+    const live = new Set(liveResumes().map((t) => t.address));
+    const ended = addrs.filter((a) => !live.has(a));
+    if (!ended.length) return;
+    cx.spawn(async (cx) => {
+      for (const address of ended) {
+        const w = this.watching[address];
+        delete this.watching[address];
+        let code = null;
+        try {
+          const r = await hc(["get", address, "--json"]);
+          code = JSON.parse(r.stdout).exit_code ?? null;
+        } catch {
+          // Removed already: report it without a code.
+        }
+        notify({
+          title: code === 0 ? `Resumed: ${w.workflowName}` : `Resume ended: ${w.workflowName}`,
+          body: code === 0 ? "The run finished its steps." : code == null ? "See Swamp runs for the result." : `swamp exited with ${code}. Watch shows its output.`,
+          level: code === 0 ? "success" : "warning",
+          action: { name: "terminal.peek", args: { terminal: address } },
+        });
+        if (code !== 0) playSound("blocked");
+      }
+      cx.notify();
+      this.refresh(cx);
+    });
   }
 
   async findSwamp() {
@@ -96,7 +132,7 @@ export default class SwampApprovals extends View {
   }
 
   async repoList() {
-    const set = new Set([...REPOS, ...((props() ?? {}).repos ?? [])].map(expand));
+    const set = new Set([...REPOS, ...(await configuredRepos()), ...((props() ?? {}).repos ?? [])].map(expand));
     for (const s of spaces()) {
       if (s.machine || !s.folder || set.has(s.folder)) continue;
       if ((await readTextFile(s.folder + "/.swamp.yaml").catch(() => null)) != null) set.add(s.folder);
@@ -107,7 +143,7 @@ export default class SwampApprovals extends View {
   async swampJson(repo, args) {
     const r = await exec(this.swamp, [...args, "--json"], { cwd: repo });
     const data = r.stdout.trim() ? parseJson(r.stdout) : null;
-    if (r.code !== 0 && !data) throw new Error((r.stderr || r.stdout).trim().split("\n").pop() || `exit ${r.code}`);
+    if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim().split("\n").pop() || `exit ${r.code}`);
     return data;
   }
 
@@ -176,7 +212,8 @@ export default class SwampApprovals extends View {
     cx.notify();
   }
 
-  // Runs a confirmed action. approve / reject / cancel run here; resume opens a tab.
+  // Runs a confirmed action. approve continues with resume once every gate is
+  // decided; reject and cancel end the run; resume starts in the background.
   act(item, cx) {
     const { key, action } = this.pending;
     this.pending = null;
@@ -198,11 +235,11 @@ export default class SwampApprovals extends View {
         if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim().split("\n").pop() || `exit ${r.code}`);
         const out = parseJson(r.stdout) ?? {};
         if (action === "approve") {
-          notify({
-            title: `Approved: ${workflowName} / ${stepName}`,
-            body: out.allGatesDecided ? "All gates decided. Resume it from the panel." : "Other gates in this run still wait.",
-            level: "success",
-          });
+          if (out.allGatesDecided === false) {
+            notify({ title: `Approved: ${workflowName} / ${stepName}`, body: "Other gates in this run still wait.", level: "success" });
+          } else {
+            this.resume(item, cx);
+          }
         } else {
           notify({ title: `${action === "reject" ? "Rejected" : "Cancelled"}: ${workflowName}`, level: "info" });
         }
@@ -216,31 +253,28 @@ export default class SwampApprovals extends View {
     });
   }
 
-  // Resume in the run's own tab: open it once, then type the command into the
-  // same shell for every later gate. Never start a second resume of a run.
+  // Resume in a background herdr-core terminal. Never start a second resume of a run.
   resume(item, cx) {
     const { repo, workflowName, runId } = item;
-    const argv = [this.swamp, "workflow", "resume", workflowName, "--run", runId];
-    const found = resumeTab(workflowName, runId);
-    if (found?.busy) {
-      showTab(found);
-      notify({ title: `Already resuming: ${workflowName}`, body: "It still runs in its tab.", level: "info" });
+    const live = liveResumes().find((t) => t.labels["swamp.run"] === runId);
+    if (live || Date.now() - (this.resuming[runId] ?? 0) < RESUME_GRACE_MS) {
+      notify({ title: `Already resuming: ${workflowName}`, level: "info", action: live ? { name: "terminal.peek", args: { terminal: live.address } } : undefined });
       return;
     }
     this.resuming[runId] = Date.now();
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        if (found?.pane) {
-          // The tab's shell waits at its prompt: run the command there.
-          showTab(found);
-          const r = await hc(["send", found.pane.terminal, `cd ${shq(repo)} && ${argv.map(shq).join(" ")}`]);
-          if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || `hc send exit ${r.code}`);
-        } else {
-          // tab.new runs argv in your interactive shell, which stays open after
-          // swamp exits, so the output stays readable and the tab can be used again.
-          run("tab.new", { name: resumeTabName(workflowName, runId), folder: repo, argv });
-        }
+        const r = await hc([
+          "run", "--bg", "--json", "--no-parent", "--no-notify",
+          "--name", resumeName(runId), "--cwd", repo,
+          "--label", `swamp.run=${runId}`, "--label", `swamp.workflow=${workflowName}`, "--label", `swamp.repo=${repo}`,
+          "--", this.swamp, "workflow", "resume", workflowName, "--run", runId,
+        ]);
+        if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim().split("\n").pop() || `hc run exit ${r.code}`);
+        const address = JSON.parse(r.stdout).address;
+        this.watching[address] = { runId, workflowName };
+        notify({ title: `Resuming: ${workflowName}`, body: "In the background. Watch shows its output.", level: "info", action: { name: "terminal.peek", args: { terminal: address } } });
       } catch (e) {
         delete this.resuming[runId];
         this.errors[`r:${runId}`] = String(e?.message ?? e);
@@ -250,26 +284,25 @@ export default class SwampApprovals extends View {
     });
   }
 
-  // "running": swamp runs in the run's tab. "starting": Resume was clicked moments ago.
-  resumeState(i) {
-    const found = resumeTab(i.workflowName, i.runId);
-    if (found?.busy) return { state: "running", found };
-    if (Date.now() - (this.resuming[i.runId] ?? 0) < RESUME_GRACE_MS) return { state: "starting", found };
-    return { state: null, found };
-  }
-
   render(cx) {
     const t = theme();
     const entries = Object.entries(this.repos);
     const items = [];
+    const resumes = liveResumes();
+    const inFlight = new Set(resumes.map((t) => t.labels["swamp.run"]));
+    for (const [runId, at] of Object.entries(this.resuming)) if (Date.now() - at < RESUME_GRACE_MS) inFlight.add(runId);
+    for (const t of resumes) {
+      items.push({ kind: "resuming", repo: t.labels["swamp.repo"] ?? "", workflowName: t.labels["swamp.workflow"] ?? "workflow", runId: t.labels["swamp.run"], address: t.address, key: `m:${t.address}` });
+    }
     for (const [repo, r] of entries) {
       for (const g of r.gates) items.push({ kind: "gate", repo, ...g, key: `g:${g.runId}/${g.stepName}` });
-      for (const x of r.ready) items.push({ kind: "ready", repo, ...x, key: `r:${x.runId}` });
+      for (const x of r.ready) if (!inFlight.has(x.runId)) items.push({ kind: "ready", repo, ...x, key: `r:${x.runId}` });
       for (const x of r.expired) items.push({ kind: "expired", repo, ...x, key: `x:${x.runId}/${x.stepName ?? ""}` });
     }
     const gates = items.filter((i) => i.kind === "gate");
     const ready = items.filter((i) => i.kind === "ready");
     const expired = items.filter((i) => i.kind === "expired");
+    const resuming = items.filter((i) => i.kind === "resuming");
     const repoErrors = entries.filter(([, r]) => r.error);
     const many = entries.length > 1;
 
@@ -286,17 +319,16 @@ export default class SwampApprovals extends View {
         .child(div().text_size(11).text_color(t.dim).child(String(count)));
 
     const VERB = {
-      approve: ["Approve this gate?", "The run then waits for Resume."],
+      approve: ["Approve and resume?", "The run continues in the background right away. Its next steps can write to real systems."],
       reject: ["Reject this gate?", "This ends the run. You cannot undo it."],
-      resume: ["Resume this run?", "The next steps run in the run's own tab. They can write to real systems."],
+      resume: ["Resume this run?", "It continues in the background. Its next steps can write to real systems."],
       cancel: ["Cancel this run?", "The gate has expired. This ends the run."],
     };
 
     const card = (i) => {
       const busy = this.busy === i.key;
       const asking = this.pending?.key === i.key ? this.pending.action : null;
-      const rs = i.kind === "ready" ? this.resumeState(i) : null;
-      const accent = i.kind === "gate" ? t.blocked : i.kind === "ready" ? t.done : t.dim;
+      const accent = i.kind === "gate" ? t.blocked : i.kind === "ready" ? t.done : i.kind === "resuming" ? t.working : t.dim;
       const inputs = i.inputs && Object.keys(i.inputs).length
         ? Object.entries(i.inputs).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join("  ")
         : null;
@@ -316,14 +348,12 @@ export default class SwampApprovals extends View {
             .when(busy, (el) => el.child(div().flex_1().text_size(11).text_color(t.muted).frames(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], 90)))
             .when(i.kind === "gate", (el) => el
               .child(button(`${i.key}-rej`, "Reject", t.surface, t.foreground, t.input, (_e, cx) => this.ask(i.key, "reject", cx), busy || this.busy))
-              .child(button(`${i.key}-ok`, "Approve", t.solid, t.solid_foreground, t.solid, (_e, cx) => this.ask(i.key, "approve", cx), busy || this.busy)))
-            .when(i.kind === "ready" && Boolean(rs?.state), (el) => el
-              .child(div().flex_1().text_size(11).text_color(t.working)
-                .child(rs.state === "running" ? "Resuming in its tab" : "Starting in its tab…"))
-              .when(Boolean(rs.found), (el) => el
-                .child(button(`${i.key}-show`, "Show tab", t.surface, t.foreground, t.input, () => showTab(rs.found)))))
-            .when(i.kind === "ready" && !rs?.state, (el) => el
-              .child(button(`${i.key}-res`, rs?.found ? "Resume in its tab" : "Resume in new tab", t.solid, t.solid_foreground, t.solid, (_e, cx) => this.ask(i.key, "resume", cx), busy || this.busy)))
+              .child(button(`${i.key}-ok`, "Approve & resume", t.solid, t.solid_foreground, t.solid, (_e, cx) => this.ask(i.key, "approve", cx), busy || this.busy)))
+            .when(i.kind === "resuming", (el) => el
+              .child(div().flex_1().text_size(11).text_color(t.working).frames(["◌ Resuming…", "◎ Resuming…"], 600))
+              .child(button(`${i.key}-watch`, "Watch", t.surface, t.foreground, t.input, () => run("terminal.peek", { terminal: i.address }))))
+            .when(i.kind === "ready", (el) => el
+              .child(button(`${i.key}-res`, "Resume", t.solid, t.solid_foreground, t.solid, (_e, cx) => this.ask(i.key, "resume", cx), busy || this.busy)))
             .when(i.kind === "expired", (el) => el
               .child(button(`${i.key}-can`, "Cancel run", t.surface, t.foreground, t.input, (_e, cx) => this.ask(i.key, "cancel", cx), busy || this.busy)));
 
@@ -335,7 +365,8 @@ export default class SwampApprovals extends View {
           .child(div().flex_none().text_size(11).text_color(t.dim).child(ago(i.suspendedAt ?? i.startedAt ?? ""))))
         .when(Boolean(i.prompt), (el) => el.child(div().text_size(12).text_color(t.foreground).child(i.prompt)))
         .when(i.kind === "ready", (el) => el.child(div().text_size(12).text_color(t.muted)
-          .child(`All gates decided. Steps ${i.stepProgress?.completed ?? "?"} of ${i.stepProgress?.total ?? "?"} done.`)))
+          .child(`Approved, not resumed yet. Steps ${i.stepProgress?.completed ?? "?"} of ${i.stepProgress?.total ?? "?"} done.`)))
+        .when(i.kind === "resuming", (el) => el.child(div().text_size(12).text_color(t.muted).child("Approved. The run continues in the background.")))
         .when(Boolean(inputs), (el) => el.child(div().text_size(11).text_color(t.muted).child(inputs)))
         .child(div().text_size(11).text_color(t.dim).truncate()
           .child(`${many ? base(i.repo) + " · " : ""}run ${String(i.runId).slice(0, 8)}`))
@@ -351,6 +382,7 @@ export default class SwampApprovals extends View {
         .child(div().text_size(11).text_color(t.dim).child(entries.map(([r]) => short(r)).join(", "))));
     }
     if (gates.length) body.child(section("Waiting for you", gates.length)).children(gates.map(card));
+    if (resuming.length) body.child(section("Resuming", resuming.length)).children(resuming.map(card));
     if (ready.length) body.child(section("Ready to resume", ready.length)).children(ready.map(card));
     if (expired.length) body.child(section("Expired", expired.length)).children(expired.map(card));
     for (const [repo, r] of repoErrors) {

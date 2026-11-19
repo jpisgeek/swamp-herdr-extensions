@@ -3,7 +3,9 @@
 // commands. Counts older than STALE_MS show as "?" (no panel reads them).
 //
 // Click an item: in a layout with the "swamp-tools" stack, the item shows
-// that tab; elsewhere it opens the panel as a window.
+// that tab; elsewhere it opens the panel as a window. Click "swamp…" for the
+// swamp-goto popup: every gate, run and workflow in one filterable list.
+// Click "stats" for the Swamp stats window (runs only while it is open).
 
 import { View, div } from "gpui-kit";
 import { h_flex } from "gpui-base";
@@ -18,13 +20,9 @@ function hasNode(n, id) {
 }
 
 function show(panel) {
-  if (panel !== "swamp-approvals" && hasNode(layout(), "swamp-tools")) {
-    run("layout.select", { stack: "swamp-tools", child: panel });
-  } else if (panel === "swamp-approvals" && hasNode(layout(), "swamp-approvals")) {
-    // The approvals panel is always visible in this layout: nothing to do.
-  } else {
-    run("mod.open", { name: panel });
-  }
+  if (!hasNode(layout(), panel)) run("mod.open", { name: panel });
+  else if (panel !== "swamp-approvals" && hasNode(layout(), "swamp-tools")) run("layout.select", { stack: "swamp-tools", child: panel });
+  // else: always visible in this layout (the approvals column).
 }
 
 export default class SwampStatus extends View {
@@ -59,7 +57,14 @@ export default class SwampStatus extends View {
 
     return h_flex().id("root").size_full().px(8).gap(2).items_center().justify_end()
       .bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8)
-      .child(div().pr(4).text_color(t.dim).child("swamp"))
-      .children(items);
+      .child(h_flex().id("goto").h(20).px(6).items_center().rounded(4).cursor_pointer()
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_click(() => run("mod.open", { name: "swamp-goto" }))
+        .text_color(t.dim).child("swamp…"))
+      .children(items)
+      .child(h_flex().id("stats").h(20).px(6).items_center().rounded(4).cursor_pointer()
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_click(() => show("swamp-stats"))
+        .text_color(t.dim).child("stats"));
   }
 }

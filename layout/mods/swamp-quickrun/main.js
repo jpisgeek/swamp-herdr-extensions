@@ -6,7 +6,8 @@
 // a normal `swamp workflow run` in a terminal tab: its output, its approval
 // gates and Ctrl-C all work as when you type it.
 //
-// Watched repos: REPOS below, props.repos (if a layout gives it), and the
+// Watched repos: "repos" in ~/.config/herdr-app/swamp.json, REPOS below,
+// props.repos (if a layout gives it), and the
 // folder of any open space on this machine that has a .swamp.yaml.
 //
 // swamp sources (checked on swamp 20261102):
@@ -17,9 +18,21 @@
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Input, InputState } from "gpui-base";
-import { closeOverlay, exec, hc, home, panes, props, readTextFile, run, spaces, theme } from "herdr";
+import { appHome, closeOverlay, exec, hc, home, panes, props, readTextFile, run, spaces, theme } from "herdr";
 
-const REPOS = []; // extra swamp repos, e.g. ["~/git/my-swamp-repo"]; open spaces with a .swamp.yaml are added automatically
+const REPOS = []; // kept for older setups; prefer "repos" in ~/.config/herdr-app/swamp.json, which every swamp mod reads
+
+// Repos from ~/.config/herdr-app/swamp.json ({ "repos": ["~/git/my-repo"] }), or none.
+async function configuredRepos() {
+  const text = await readTextFile(appHome() + "/swamp.json").catch(() => null);
+  if (!text) return [];
+  try {
+    const repos = JSON.parse(text).repos;
+    return Array.isArray(repos) ? repos.filter((r) => typeof r === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 const expand = (p) => (p.startsWith("~/") ? home() + p.slice(1) : p);
 const short = (p) => (p.startsWith(home()) ? "~" + p.slice(home().length) : p);
@@ -163,7 +176,7 @@ export default class SwampQuickRun extends View {
   }
 
   async repoList() {
-    const set = new Set([...REPOS, ...((props() ?? {}).repos ?? [])].map(expand));
+    const set = new Set([...REPOS, ...(await configuredRepos()), ...((props() ?? {}).repos ?? [])].map(expand));
     for (const s of spaces()) {
       if (s.machine || !s.folder || set.has(s.folder)) continue;
       if ((await readTextFile(s.folder + "/.swamp.yaml").catch(() => null)) != null) set.add(s.folder);
@@ -174,7 +187,7 @@ export default class SwampQuickRun extends View {
   async swampJson(repo, args) {
     const r = await exec(this.swamp, [...args, "--json"], { cwd: repo });
     const data = r.stdout.trim() ? parseJson(r.stdout) : null;
-    if (r.code !== 0 && (!data || data.error)) throw new Error(data?.error ?? ((r.stderr || r.stdout).trim().split("\n").pop() || `exit ${r.code}`));
+    if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim().split("\n").pop() || `exit ${r.code}`);
     return data;
   }
 
