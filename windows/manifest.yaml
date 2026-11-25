@@ -1,0 +1,21 @@
+manifestVersion: 1
+name: "@jpisgeek/herdr-windows"
+version: "2026.11.25.1"
+license: MIT
+description: "Provision a Windows Herdr core over pinned SSH and manage its local hc machine registration."
+repository: "https://github.com/jpisgeek/swamp-herdr-extensions/tree/main/windows"
+paths:
+  base: manifest
+behaviors:
+  - extensions/herdr_windows.ts
+additionalFiles:
+  - README.md
+  - LICENSE
+platforms:
+  - darwin-aarch64
+  - darwin-x86_64
+  - linux-x86_64
+  - linux-aarch64
+labels:
+  - herdr
+  - windows

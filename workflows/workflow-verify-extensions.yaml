@@ -1,6 +1,6 @@
 id: edc8db8b-77ca-43b4-abab-f72306efbd30
 name: verify-extensions
-description: Format check, tests, quality score and push dry-run for both extensions. Pushes nothing.
+description: Check extension formatting, tests and quality. Existing package dry-runs push nothing.
 tags: {}
 jobs:
   - name: verify
@@ -71,5 +71,14 @@ jobs:
           inputs: { run: "swamp extension push layout/manifest.yaml --dry-run --yes" }
         dependsOn:
           - { step: layout-quality, condition: { type: succeeded } }
+        weight: 0
+        allowFailure: false
+      - name: windows-verify
+        task:
+          type: model_method
+          modelIdOrName: ext-cli
+          methodName: execute
+          inputs: { run: "$HOME/.swamp/deno/deno test --allow-all windows/extensions/ && swamp extension fmt windows/manifest.yaml --check && swamp extension quality windows/manifest.yaml" }
+        dependsOn: []
         weight: 0
         allowFailure: false
