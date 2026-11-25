@@ -1,6 +1,12 @@
 # Plan: `@jpisgeek/herdr-windows`, herdr-core on a Windows machine
 
-Status: ready for implementation · Owner of plan and acceptance tests: reviewer · Implementer: assigned worker
+Status: ready for implementation, **revision 1** · Owner of plan and acceptance tests: reviewer · Implementer: assigned worker
+
+Revision 1 (2026-11-25): live step 4 is rewritten. On hc 0.1.22, `hc machine add` does not persist an entry that
+fails to log in, so the stale pin is now replayed on an existing entry by dropping its live connection. Also
+settled: `hc machine update` refuses a Windows `--via` machine without a TTY and gives a manual-install hint.
+`update` must surface that hint verbatim as its result (`status: manual`, with the exact command) rather than
+fail. The acceptance tests are unchanged.
 
 ## Goal
 
@@ -97,10 +103,22 @@ client machine. The machine name is `e2e-*`, added with `--temp` semantics where
 2. `setup` (using the bootstrap identity for the authorize step) → hc shows `connected`. `hc exec --on <m> -- cmd /d /c ver`
    succeeds. The guest's keys file has exactly one line for the client key, with the requested `from=`.
 3. `setup` again → plan `[]`, no file on either side changes (compare hashes).
-4. Make the pin stale: rewrite the key's `from=` on the guest to one unrelated address. Restart the core
-   connection (`hc machine rm`, then add back through the same wrapper) and observe `needs_login`. Then
-   `preflight` must name the rejection reason, and `setup` must give plan `[authorize, await-reconnect]` and end
-   `connected` with no person involved. This is the real outage replayed.
+4. Replay the real outage. The hc machine entry is never removed in this step. On hc 0.1.22, `hc machine add`
+   persists an entry only after a successful login, so remove-then-add cannot produce a stale `needs_login`
+   entry. In the real outage the entry already existed, its live connection dropped, and the reconnect failed.
+   1. With the entry from step 2 `connected`, use the **bootstrap** identity to rewrite the client key's `from=`
+      on the guest to one unrelated address.
+   2. Drop the live connection without touching hc's entry. On the guest, stop the `herdr-core.exe` processes
+      whose command line ends in ` connect` (the per-client connection processes, not `serve` or `hold`). The
+      guest is run-owned, so stopping them is in scope.
+   3. Within 3 minutes, `hc machine ls` shows the entry as `needs_login`, with `target` unchanged. Record the
+      transition time. If hc never gets there, stop and report the observed state; don't improvise.
+   4. `preflight` names the rejection reason from the guest's OpenSSH log ("not from a permitted host" or
+      equivalent), and its plan is `[authorize, await-reconnect]`.
+   5. `setup` repairs the pin and ends `connected` with no person and no `hc machine login`. hc retries
+      `needs_login` machines only every 10 minutes or so, so the acceptance bound is **11 minutes from the repair**.
+      `setup`'s own await may give up sooner and print the manual command. The run then keeps polling
+      `hc machine ls` (read-only) up to the bound, and records both setup's result and the time to `connected`.
 5. `status` → connected, versions equal.
 6. `adopt` on a second machine entry added by hand through a hand-written wrapper → recorded, drift reported,
    nothing changed.
