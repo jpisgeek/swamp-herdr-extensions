@@ -28,6 +28,10 @@ adds no Windows core autostart entry.
    using a syntactically valid placeholder fingerprint. Replace the placeholder
    with the console fingerprint before connecting.
 
+   On default Windows OpenSSH, a standard account must be in **OpenSSH Users**
+   to log in. If the host uses a custom admission policy, have an administrator
+   check its SSH admission rules for that account.
+
 ## Connect and check status
 
 Set `machineName`, `host`, `user`, `allowFrom`, `identityFile`, and
@@ -38,7 +42,10 @@ when you need to override the detected OpenSSH default shell.
 Run `preflight` to check pinning, login, key ACLs, versions, and the planned
 changes. If a separate bootstrap key already works for this Windows account,
 pass its absolute path as `bootstrapIdentityFile` to `preflight` and `setup`.
-Use `bootstrapSshPrefix` when it needs a different agent helper.
+Use `bootstrapSshPrefix` when it needs a different agent helper. If SSH policy
+blocks the target account itself, pass a separate admitted local administrator
+with `bootstrapUser` and its `bootstrapIdentityFile`. Preflight uses that
+identity only to inspect the target account's admission policy.
 
 Run `setup` to apply the plan and check the resulting connection. Set
 `temporary: true` for a scratch machine entry. The transport stores its wrapper

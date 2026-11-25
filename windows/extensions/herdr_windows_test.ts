@@ -40,6 +40,8 @@ Deno.test("standard bootstrap skips host-wide work and protects the profile keys
   assertStringIncludes(script, "Write-Keys $before");
   assertStringIncludes(script, "ssh-keyscan.exe");
   assertStringIncludes(script, "-T 5 -t ed25519 127.0.0.1");
+  assertStringIncludes(script, "Get-SshEligibility $env:USERNAME");
+  assertStringIncludes(script, "Write-Warning $eligibility.message");
 });
 
 Deno.test("setup pins the host, preserves healthy state, and reports manual update", async () => {
@@ -52,6 +54,7 @@ Deno.test("setup pins the host, preserves healthy state, and reports manual upda
   const sshCalls = join(dir, "ssh-calls");
   const machines = join(dir, "machines");
   const oldVersion = join(dir, "old-version");
+  const blocked = join(dir, "policy-blocked");
   const receipts: unknown[] = [];
   const observed = await fingerprint(key);
   const globals = {
@@ -119,6 +122,8 @@ test "${"${#last}"}" -lt 8191 || exit 4
 printf '%s\\n' "$body" >> ${shQuote(sshCalls)}
 remote_version=0.1.22
 test ! -f ${shQuote(oldVersion)} || remote_version=0.1.21
+eligibility=eligible
+test ! -f ${shQuote(blocked)} || eligibility='not eligible'
 printf '%s\\n' ${
         shQuote(JSON.stringify({
           build: 26100,
@@ -132,8 +137,11 @@ printf '%s\\n' ${
           running: true,
           onPath: true,
           sourcePinRejected: false,
+          status: "ELIGIBILITY",
+          directive: "AllowGroups",
+          message: "Ask an administrator to add the account to OpenSSH Users.",
         }))
-      } | sed "s/VERSION/$remote_version/"
+      } | sed "s/VERSION/$remote_version/;s/ELIGIBILITY/$eligibility/"
 `,
       { mode: 0o700 },
     );
@@ -158,8 +166,18 @@ printf '%s\\n' ${
     assertEquals(receipts, []);
 
     globals.hostKeyFingerprint = observed;
+    await Deno.writeTextFile(blocked, "");
+    await assertRejects(
+      () => runSetup({ temporary: true }, context),
+      Error,
+      "OpenSSH Users",
+    );
+    await assertRejects(() => Deno.stat(stateDir), Deno.errors.NotFound);
+    assertEquals(receipts, []);
+    await Deno.remove(blocked);
+    await Deno.remove(sshCalls);
     await runSetup({ temporary: true }, context);
-    const body = (await Deno.readTextFile(sshCalls)).trim();
+    const [body] = (await Deno.readTextFile(sshCalls)).trim().split("\n");
     const script = new TextDecoder().decode(
       inflateRawSync(Uint8Array.from(atob(body), (char) => char.charCodeAt(0))),
     );

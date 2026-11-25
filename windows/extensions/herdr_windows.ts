@@ -465,6 +465,57 @@ if ($scan) {
 }
 Write-Warning 'Could not observe the SSH host fingerprint on loopback. Verify it with an administrator.'
 `;
+const sshEligibility = String.raw`
+function Get-SshEligibility([string] $account, [string[]] $groups) {
+  $unknown = @{ status = 'unknown'; message = 'Ask an administrator to check the effective sshd admission rules.' }
+  try { $lines = [IO.File]::ReadAllLines((Join-Path $env:ProgramData 'ssh\sshd_config')) }
+  catch { return $unknown }
+  $rules = @{}
+  $sources = @{}
+  $conditional = $false
+  foreach ($line in $lines) {
+    if ($line -notmatch '^\s*([a-z]+)(?:\s+|=)(.*)$') { continue }
+    $directive = $Matches[1]
+    $arguments = $Matches[2]
+    if ($directive -ieq 'Include') { return $unknown }
+    if ($directive -ieq 'Match') { $conditional = $true; continue }
+    if ($directive -notin @('DenyUsers','AllowUsers','DenyGroups','AllowGroups')) { continue }
+    if ($conditional) { return $unknown }
+    if ($arguments -notmatch '^\s*(?:"[^"]+"|[^"\s#]+)(?:\s+(?:"[^"]+"|[^"\s#]+))*\s*(?:#.*)?$') { return $unknown }
+    $tokens = @([regex]::Matches($arguments, '"[^"]+"|[^"\s#]+|#.*$') |
+      Where-Object { !$_.Value.StartsWith('#') } | ForEach-Object { $_.Value.Trim('"') })
+    if (@($tokens | Where-Object { $_ -match '[!@,]' }).Count) { return $unknown }
+    $rules[$directive] += $tokens
+    $sources[$directive] += @($line.Trim())
+  }
+  foreach ($directive in @('DenyUsers','AllowUsers','DenyGroups','AllowGroups')) {
+    if (!$rules.ContainsKey($directive)) { continue }
+    $names = if ($directive.EndsWith('Users')) { @($account) } else { $groups }
+    $matched = $false
+    foreach ($pattern in $rules[$directive]) {
+      $re = '^' + [regex]::Escape($pattern).Replace('\*','.*').Replace('\?','.') + '$'
+      if (@($names | Where-Object { $_ -match $re }).Count) { $matched = $true; break }
+    }
+    if (($directive.StartsWith('Deny') -and $matched) -or ($directive.StartsWith('Allow') -and !$matched)) {
+      $message = 'The account is not eligible for SSH under ' + ($sources[$directive] -join '; ') + '.'
+      if ($directive -eq 'AllowGroups' -and 'openssh users' -in $rules[$directive]) {
+        $message += ' Ask an administrator to add the account to OpenSSH Users.'
+      } else { $message += ' Ask an administrator to review this admission rule.' }
+      return @{ status = 'not eligible'; directive = $directive; message = $message }
+    }
+  }
+  return @{ status = 'eligible' }
+}
+function Get-TokenSshGroups {
+  foreach ($sid in $identity.Groups) {
+    try {
+      $name = $sid.Translate([Security.Principal.NTAccount]).Value
+      $name
+      $name.Split('\')[-1]
+    } catch {}
+  }
+}
+`;
 const keyContext = `if ($isAdmin) {
   $keys = ${adminKeys}
   ${adminAcl}
@@ -520,6 +571,12 @@ ${admin ? adminAcl : userAcl}
       : "for the user, SYSTEM and Administrators"
   }.
 ${admin ? "" : standardDirectoryAcl}
+${
+    admin ? "" : `${sshEligibility}
+$eligibility = Get-SshEligibility $env:USERNAME @(Get-TokenSshGroups)
+if ($eligibility.status -ne 'eligible') { Write-Warning $eligibility.message }
+`
+  }
 ${aclFunctions}
 $before = Read-Keys
 $line = ${line}
@@ -569,6 +626,9 @@ type Context = {
 const bootstrapIdentity = z.object({
   bootstrapIdentityFile: abs.optional(),
   bootstrapSshPrefix: z.array(abs).min(1).optional(),
+  bootstrapUser: user.optional().describe(
+    "Alternate Windows account for read-only SSH policy inspection",
+  ),
 });
 type BootstrapIdentity = z.infer<typeof bootstrapIdentity>;
 const empty = z.object({});
@@ -784,9 +844,14 @@ $default = (Get-ItemProperty -Path HKLM:\\SOFTWARE\\OpenSSH -Name DefaultShell -
 $shell = if (!$default -or $default -match '(?i)(^|\\\\)cmd(\\.exe)?$') { 'cmd' }
   elseif ($default -match '(?i)(^|\\\\)(powershell|pwsh)(\\.exe)?$') { 'powershell' }
   else { 'unsupported' }
-$rejected = @(Get-WinEvent -LogName 'OpenSSH/Operational' -MaxEvents 100 -ErrorAction SilentlyContinue |
-  Where-Object { $_.TimeCreated -gt (Get-Date).AddMinutes(-1) -and $_.Message -match 'not from a permitted host' } |
-  Select-Object -First 1)
+$rejected = @()
+try {
+  $rejected = @(Get-WinEvent -LogName 'OpenSSH/Operational' -MaxEvents 100 -ErrorAction SilentlyContinue |
+    Where-Object { $_.TimeCreated -gt (Get-Date).AddMinutes(-1) -and $_.Message -match 'not from a permitted host' } |
+    Select-Object -First 1)
+} catch {
+  # Reading the event channel may require an administrator.
+}
 @{
   build = [Environment]::OSVersion.Version.Build
   admin = $isAdmin
@@ -814,6 +879,42 @@ const remoteSchema = z.object({
   onPath: z.boolean(),
   sourcePinRejected: z.boolean(),
 });
+const eligibilitySchema = z.object({
+  status: z.enum(["eligible", "not eligible", "unknown"]),
+  directive: z.enum(["AllowUsers", "AllowGroups", "DenyUsers", "DenyGroups"])
+    .optional(),
+  message: z.string().optional(),
+});
+type Eligibility = z.infer<typeof eligibilitySchema>;
+
+function eligibilityScript(target: string) {
+  return `${psStart}
+${sshEligibility}
+$account = ${psQuote(target)}
+if ($account -ieq $env:USERNAME) {
+  Get-SshEligibility $account @(Get-TokenSshGroups) | ConvertTo-Json -Compress
+  return
+}
+if (!$isAdmin) { throw 'Alternate-account inspection requires an administrator' }
+$target = Get-LocalUser -Name $account
+$memberSids = @($target.SID.Value, 'S-1-5-11', 'S-1-1-0')
+$localGroups = @(Get-LocalGroup)
+do {
+  $before = $memberSids.Count
+  foreach ($group in $localGroups) {
+    if ($group.SID.Value -in $memberSids) { continue }
+    if (@(Get-LocalGroupMember -Group $group | Where-Object { $_.SID.Value -in $memberSids }).Count) {
+      $memberSids += $group.SID.Value
+    }
+  }
+} while ($before -ne $memberSids.Count)
+$groups = @($localGroups | Where-Object { $_.SID.Value -in $memberSids } | ForEach-Object {
+  $_.Name
+  $_.SID.Translate([Security.Principal.NTAccount]).Value
+})
+Get-SshEligibility $account $groups | ConvertTo-Json -Compress
+`;
+}
 
 function versionFrom(text: string): string {
   return version.parse(text.replace(/^hc /, ""));
@@ -840,6 +941,7 @@ async function inspect(
     hostKeyMatches: !!verified.key,
     keyAuthorized: false,
     keyOptionsCurrent: false,
+    sshEligibility: { status: "unknown" } as Eligibility,
     authReason: null as string | null,
     windowsBuild: null as number | null,
     administratorsMember: null as boolean | null,
@@ -869,18 +971,42 @@ async function inspect(
   } else if (login.code) {
     row.authReason = "SSH rejected public-key authentication";
   }
-  const bootstrap = input.bootstrapIdentityFile
-    ? directSsh(g, verified.known!, {
-      identityFile: input.bootstrapIdentityFile,
-      sshPrefix: input.bootstrapSshPrefix ?? g.sshPrefix,
-    })
+  const bootstrapAccess = input.bootstrapIdentityFile
+    ? directSsh(
+      { ...g, user: input.bootstrapUser ?? g.user },
+      verified.known!,
+      {
+        identityFile: input.bootstrapIdentityFile,
+        sshPrefix: input.bootstrapSshPrefix ?? g.sshPrefix,
+      },
+    )
     : null;
+  const bootstrap = input.bootstrapUser &&
+      input.bootstrapUser.toLowerCase() !== g.user.toLowerCase()
+    ? null
+    : bootstrapAccess;
+  const policyAccess = login.code ? bootstrapAccess : access;
+  const policy = await policyAccess?.(eligibilityScript(g.user), signal);
+  if (policy?.code === 0) {
+    try {
+      const parsed = eligibilitySchema.safeParse(JSON.parse(policy.out));
+      if (parsed.success) row.sshEligibility = parsed.data;
+    } catch {
+      // The session did not return an interpretable admission check.
+    }
+  }
+  if (row.sshEligibility.status === "not eligible") {
+    row.authReason = row.sshEligibility.message ?? null;
+  }
   const privileged = login.code
     ? await bootstrap?.(inspectScript, signal)
     : login;
   if (!privileged || privileged.code) return { row, entry };
   const remote = remoteSchema.parse(JSON.parse(privileged.out));
-  if (!row.keyAuthorized && remote.sourcePinRejected) {
+  if (
+    !row.keyAuthorized && remote.sourcePinRejected &&
+    row.sshEligibility.status !== "not eligible"
+  ) {
     row.authReason = "sshd: not from a permitted host";
   }
   const remoteShell = g.remoteShell ?? remote.shell;
@@ -900,7 +1026,7 @@ async function inspect(
   }
   const keyOptionsCurrent = remote.acl &&
     !upsertAuthorizedKey(remote.keys, desired).changed;
-  const plan = expected
+  const plan = expected && row.sshEligibility.status !== "not eligible"
     ? planSetup({
       keyAuthorized: row.keyAuthorized,
       keyOptionsCurrent,
@@ -1072,6 +1198,11 @@ async function setup(input: z.infer<typeof setupArgs>, context: Context) {
   const seen = await inspect(g, input, signal);
   const { row, entry, remote, expected, verified, access, bootstrap, desired } =
     seen;
+  if (row.sshEligibility.status === "not eligible") {
+    throw new Error(
+      row.sshEligibility.message ?? "The account is not eligible for SSH",
+    );
+  }
   if (entry?.session) {
     throw new Error("Machines with a named session are read-only");
   }
