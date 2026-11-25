@@ -7,6 +7,7 @@ import { join } from "node:path";
 import {
   authorizedKeyLine,
   behavior,
+  classifyRemoteLine,
   fingerprint,
   shQuote,
 } from "./herdr_windows.ts";
@@ -163,4 +164,22 @@ printf '%s\\n' ${
     Deno.Command = Command;
     await Deno.remove(dir, { recursive: true });
   }
+});
+
+Deno.test("classifies both exact hc 0.1.22 connect probes", () => {
+  const unix =
+    'sh -c \'p=$(command -v herdr-core) || p=$HOME/.local/bin/herdr-core; [ -x "$p" ] || { echo "herdr-core is not installed here" >&2; exit 127; }; exec "$p" connect\'';
+  const windows =
+    'cmd /d /c "if exist .\\AppData\\Local\\Programs\\herdr-core\\herdr-core.exe (.\\AppData\\Local\\Programs\\herdr-core\\herdr-core.exe connect) else (echo herdr-core is not installed here 1>&2 & exit /b 127)"';
+  assertEquals(classifyRemoteLine(unix), "connect");
+  assertEquals(classifyRemoteLine(windows), "connect");
+  assertEquals(classifyRemoteLine("uname -sm"), "passthrough");
+  assertEquals(
+    classifyRemoteLine('cmd /d /c "echo herdr-core-windows"'),
+    "passthrough",
+  );
+  assertEquals(
+    classifyRemoteLine(windows.replace(" connect)", " --version)")),
+    "passthrough",
+  );
 });

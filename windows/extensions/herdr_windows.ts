@@ -179,6 +179,9 @@ export function renderKnownHosts(
 }
 
 const probes = [
+  // Captured as one --via argument each from hc 0.1.22.
+  'sh -c \'p=$(command -v herdr-core) || p=$HOME/.local/bin/herdr-core; [ -x "$p" ] || { echo "herdr-core is not installed here" >&2; exit 127; }; exec "$p" connect\'',
+  'cmd /d /c "if exist .\\AppData\\Local\\Programs\\herdr-core\\herdr-core.exe (.\\AppData\\Local\\Programs\\herdr-core\\herdr-core.exe connect) else (echo herdr-core is not installed here 1>&2 & exit /b 127)"',
   "sh -c 'herdr-core connect'",
   `sh -c '"$HOME"/.local/bin/herdr-core connect'`,
   "cmd /d /c herdr-core.exe connect",
