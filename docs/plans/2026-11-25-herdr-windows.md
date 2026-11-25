@@ -1,6 +1,6 @@
 # Plan: `@jpisgeek/herdr-windows`, herdr-core on a Windows machine
 
-Status: ready for implementation, **revision 2** · Owner of plan and acceptance tests: reviewer · Implementer: assigned worker
+Status: ready for implementation, **revision 3** · Owner of plan and acceptance tests: reviewer · Implementer: assigned worker
 
 Revision 1 (2026-11-25): live step 4 is rewritten. On hc 0.1.22, `hc machine add` does not persist an entry that
 fails to log in, so the stale pin is now replayed on an existing entry by dropping its live connection. Also
@@ -12,6 +12,10 @@ Revision 2 (2026-11-25): live step 8 runs PowerShell Direct as the standard user
 Users only). The standard-account bootstrap must not need elevation: when it is not elevated it skips the sshd
 and firewall changes with a message, and still writes the user's keys file and prints the fingerprint. The
 acceptance tests are unchanged.
+
+Revision 3 (2026-11-25): standard-user SSH needs membership of a group in sshd's `AllowGroups` (on default
+Windows OpenSSH, **OpenSSH Users**). `preflight` and the standard bootstrap now report SSH eligibility, and step 8.5
+adds the user to OpenSSH Users as the fixture. The acceptance tests are unchanged.
 
 ## Goal
 
@@ -64,6 +68,14 @@ example one that loads a vault-held key into a short-lived, destination-bound ag
 | `status` | no | hc machine state, versions, wrapper drift, and whether the remote core is running. |
 | `adopt` | no | Records an existing hc machine and its existing `--via` wrapper as this extension's resource without changing either. This is how machines set up by hand get backfilled. Reports drift from what `setup` would render; it does not fix it. |
 | `teardown` | yes | Requires `confirm` equal to `machineName`. Runs `hc machine rm` (remote terminals keep running), removes the key line (backup first), and deletes `<stateDir>/<machineName>/`. With `uninstall: true` (default false) it also stops the core and removes the install directory. It never removes other keys or other machines. |
+
+**SSH eligibility (revision 3).** `preflight` parses the top-level `AllowUsers`, `AllowGroups`, `DenyUsers` and
+`DenyGroups` lines of `%ProgramData%\ssh\sshd_config`, compares them with the account's groups, and reports
+`eligible`, `not eligible` (naming the directive that blocks it) or `unknown` (when `Match` blocks or `Include`
+could change the answer). The standard-account bootstrap prints the same check as a warning. It cannot change
+group membership without elevation, so it names the group an administrator must add the user to. `setup`
+treats `not eligible` as a stop with that message, not as an authorize problem. The README states the
+prerequisite: on default Windows OpenSSH, a non-admin user must be in **OpenSSH Users**.
 
 `--session` is not supported in v1. Machines added with a non-default session are reported, not managed.
 
@@ -141,7 +153,12 @@ client machine. The machine name is `e2e-*`, added with `--temp` semantics where
       them. On this guest they are already in place from first boot.
    4. Readback as Administrator: exactly one line for the client key, with the requested `from=`; the file and
       its `.ssh` folder are owned by and limited to e2e-std, SYSTEM and Administrators.
-   5. SSH as `e2e-std` with the client key → `whoami` returns e2e-std.
+   5. SSH eligibility. Windows OpenSSH's default `sshd_config` admits only `AllowGroups administrators "openssh users"`.
+      1. `preflight` for `user: e2e-std` → reports the account **not eligible** and names the `AllowGroups` line.
+         The bootstrap output from 8.3 already printed the same warning (see "SSH eligibility" below).
+      2. As Administrator, add e2e-std to the local group **OpenSSH Users**, which the OpenSSH install creates. It
+         stays out of Administrators. Do not edit `sshd_config`.
+      3. `preflight` again → eligible. SSH as `e2e-std` with the client key → `whoami` returns e2e-std.
    If step 8.2 shows PowerShell Direct refusing a non-admin member of Remote Management Users on this build,
    stop and report the exact error. Don't switch to another launch path.
 
