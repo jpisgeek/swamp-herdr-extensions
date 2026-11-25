@@ -47,8 +47,10 @@ default and ignores global and user SSH configuration.
 
 When an old source restriction causes `needs_login`, supply the working
 bootstrap identity so setup can repair the client key line and verify that the
-client authenticates. Setup waits up to three minutes for the machine to connect
-and returns the local `hc machine login` command if it times out.
+client authenticates. Setup polls for up to three minutes while hc retries the
+connection. On timeout, it prints the local `hc machine login` command. If the
+Windows transport requires a manual update, setup records hc's hint and the
+PowerShell command to run on Windows.
 
 Use `status` for connection and core state, or `adopt` for a read-only receipt
 and drift report for an existing registration. Named Herdr sessions can be
@@ -83,6 +85,5 @@ swamp behavior run windows-lab teardown --input confirm=windows-lab
 ```
 
 The behavior uses local `ssh-keyscan` to observe host keys, `ssh` for pinned
-Windows operations, and `hc` for registration. If a managed connection needs an
-immediate login retry, setup can give the local hc client a pseudo-terminal
-through `script`. Set `sshPath` and `hcPath` only to executables you trust.
+Windows operations, and `hc` for registration. Set `sshPath` and `hcPath` only
+to executables you trust.

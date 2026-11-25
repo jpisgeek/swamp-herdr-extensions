@@ -17,7 +17,7 @@ const key =
   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGV1K2ZLpIKGtS1ULVwlvdP1Q2kFqYn9+jfNIHVSzFJd";
 const networks = ["192.0.2.0/24"];
 
-Deno.test("setup checks the host pin before writing and leaves a healthy setup unchanged", async () => {
+Deno.test("setup pins the host, preserves healthy state, and reports manual update", async () => {
   const dir = await Deno.makeTempDir();
   const stateDir = join(dir, "state");
   const hcPath = join(dir, "hc");
@@ -26,6 +26,7 @@ Deno.test("setup checks the host pin before writing and leaves a healthy setup u
   const scan = join(dir, "scan");
   const sshCalls = join(dir, "ssh-calls");
   const machines = join(dir, "machines");
+  const oldVersion = join(dir, "old-version");
   const receipts: unknown[] = [];
   const observed = await fingerprint(key);
   const globals = {
@@ -71,6 +72,7 @@ case "$1 $2" in
         }))
       } > ${shQuote(machines)} ;;
   'exec --on') test "$*" = 'exec --on test-windows -- cmd /d /c ver' ;;
+  'machine update') printf '%s\\n' '{"error":{"kind":"install_failed","hint":"install hc there yourself","message":"<via> runs Windows"}}' >&2; exit 1 ;;
   *) exit 2 ;;
 esac
 `,
@@ -90,6 +92,8 @@ body=$(cat)
 test "${"${#body}"}" = "$size" || exit 3
 test "${"${#last}"}" -lt 8191 || exit 4
 printf '%s\\n' "$body" >> ${shQuote(sshCalls)}
+remote_version=0.1.22
+test ! -f ${shQuote(oldVersion)} || remote_version=0.1.21
 printf '%s\\n' ${
         shQuote(JSON.stringify({
           build: 26100,
@@ -99,12 +103,12 @@ printf '%s\\n' ${
           shell: "cmd",
           exe:
             "C:\\Users\\test\\AppData\\Local\\Programs\\herdr-core\\herdr-core.exe",
-          version: "0.1.22",
+          version: "VERSION",
           running: true,
           onPath: true,
           sourcePinRejected: false,
         }))
-      }
+      } | sed "s/VERSION/$remote_version/"
 `,
       { mode: 0o700 },
     );
@@ -166,6 +170,20 @@ printf '%s\\n' ${
         state: "connected",
       },
     ]);
+    await Deno.writeTextFile(oldVersion, "");
+    await runSetup({ temporary: true }, context);
+    assertEquals(receipts.at(-1), {
+      machineName: "test-windows",
+      plan: ["update"],
+      installer: null,
+      state: "connected",
+      update: {
+        status: "manual",
+        hint: "install hc there yourself",
+        command:
+          "& (Join-Path $env:LOCALAPPDATA 'Programs\\herdr-core\\herdr-core.exe') update",
+      },
+    });
   } finally {
     Deno.Command = Command;
     await Deno.remove(dir, { recursive: true });

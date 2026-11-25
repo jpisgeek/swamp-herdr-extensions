@@ -932,21 +932,13 @@ async function checkedHc(
 
 async function awaitConnected(
   g: Globals,
-  reconnect: boolean,
   signal?: AbortSignal,
+  repairedAt?: string,
 ) {
   const until = Date.now() + 180_000;
   const deadline = AbortSignal.timeout(180_000);
   const bounded = signal ? AbortSignal.any([signal, deadline]) : deadline;
   const login = [g.hcPath, "machine", "login", g.machineName];
-  if (reconnect && (await machine(g, bounded))?.state === "needs_login") {
-    // hc's login command needs a local TTY. The managed SSH wrapper still uses
-    // batch authentication and cannot read credentials from that terminal.
-    const tty = Deno.build.os === "darwin"
-      ? ["-q", "/dev/null", ...login]
-      : ["-q", "-e", "-c", login.map(shQuote).join(" "), "/dev/null"];
-    await command("/usr/bin/script", tty, bounded, 15_000).catch(() => null);
-  }
   while (Date.now() < until && !bounded.aborted) {
     const entry = await machine(g, bounded).catch((error) => {
       if (!bounded.aborted) throw error;
@@ -956,9 +948,10 @@ async function awaitConnected(
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   throw new Error(
-    `hc did not connect within three minutes. Run ${
-      login.map(shQuote).join(" ")
-    } in a terminal.`,
+    (repairedAt ? `Client key repaired at ${repairedAt}. ` : "") +
+      `hc did not connect within three minutes. Run ${
+        login.map(shQuote).join(" ")
+      } in a terminal.`,
   );
 }
 
@@ -1057,6 +1050,8 @@ async function setup(input: z.infer<typeof setupArgs>, context: Context) {
   ];
   if (input.temporary) add.push("--temp");
   let installer: string | null = null;
+  let update: { status: "manual"; hint: string; command: string } | undefined;
+  let repairedAt: string | undefined;
   let added = false;
   for (const action of row.plan) {
     switch (action) {
@@ -1068,6 +1063,9 @@ async function setup(input: z.infer<typeof setupArgs>, context: Context) {
           updated.text,
           signal,
         );
+        if (row.plan.includes("await-reconnect")) {
+          repairedAt = new Date().toISOString();
+        }
         if ((await access("exit 0", signal)).code) {
           throw new Error(
             "The client key still cannot authenticate after authorization",
@@ -1101,7 +1099,7 @@ async function setup(input: z.infer<typeof setupArgs>, context: Context) {
         installer = "verified-release";
         break;
       }
-      case "update":
+      case "update": {
         if (
           !machineVia(entry, loc.wrapper) || !row.wrapperCurrent || !entry ||
           entry.state !== "connected"
@@ -1110,15 +1108,43 @@ async function setup(input: z.infer<typeof setupArgs>, context: Context) {
             "Update requires a connected machine using the current pinned wrapper",
           );
         }
-        await checkedHc(
-          g,
+        const result = await command(
+          g.hcPath,
           ["machine", "update", entry.name, "--json"],
-          "The client could not update this Windows via transport. Run " +
-            "& (Join-Path $env:LOCALAPPDATA 'Programs\\herdr-core\\herdr-core.exe') update " +
-            "in PowerShell as the Windows account that owns the Herdr installation.",
           signal,
+          150_000,
         );
+        if (result.code) {
+          const detail = z.object({
+            error: z.object({
+              kind: z.literal("install_failed"),
+              hint: z.literal("install hc there yourself"),
+            }),
+          });
+          const refusal = [result.err, result.out].flatMap((output) =>
+            output.split("\n").flatMap((line) => {
+              try {
+                const parsed = detail.safeParse(JSON.parse(line));
+                return parsed.success ? [parsed.data.error] : [];
+              } catch {
+                return [];
+              }
+            })
+          )[0];
+          if (!refusal) {
+            throw new Error(
+              "hc machine update failed without its Windows manual-install hint",
+            );
+          }
+          update = {
+            status: "manual",
+            hint: refusal.hint,
+            command:
+              "& (Join-Path $env:LOCALAPPDATA 'Programs\\herdr-core\\herdr-core.exe') update",
+          };
+        }
         break;
+      }
       case "write-wrapper":
         await stageWrapper(g, expected, verified.known);
         break;
@@ -1161,7 +1187,7 @@ async function setup(input: z.infer<typeof setupArgs>, context: Context) {
         break;
     }
   }
-  await awaitConnected(g, row.plan.includes("await-reconnect"), signal);
+  await awaitConnected(g, signal, repairedAt);
   await checkedHc(
     g,
     ["exec", "--on", g.machineName, "--", "cmd", "/d", "/c", "ver"],
@@ -1173,6 +1199,8 @@ async function setup(input: z.infer<typeof setupArgs>, context: Context) {
     plan: row.plan,
     installer,
     state: "connected",
+    ...(update ? { update } : {}),
+    ...(repairedAt ? { repairedAt } : {}),
   });
 }
 
