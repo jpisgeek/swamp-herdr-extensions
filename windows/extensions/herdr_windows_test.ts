@@ -11,12 +11,31 @@ import {
   classifyRemoteLine,
   fingerprint,
   renderBootstrapScript,
+  renderReleaseInstallScript,
   shQuote,
 } from "./herdr_windows.ts";
 
 const key =
   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGV1K2ZLpIKGtS1ULVwlvdP1Q2kFqYn9+jfNIHVSzFJd";
 const networks = ["192.0.2.0/24"];
+
+Deno.test("release installer verifies the unpacked Herdr signer before execution or move", () => {
+  const script = renderReleaseInstallScript("0.1.22");
+  const unpack = script.indexOf("Expand-Archive -LiteralPath $zip");
+  const signature = script.indexOf(
+    "Get-AuthenticodeSignature -LiteralPath $new",
+  );
+  const refusal = script.indexOf(
+    "if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -cne 'CN=herdr, O=herdr, L=Wilmington, S=Delaware, C=US') {\n" +
+      "    throw 'The Windows release executable lacks a valid Authenticode signature from the expected Herdr signer'",
+  );
+  assertEquals(unpack >= 0 && unpack < signature && signature < refusal, true);
+  assertEquals(refusal < script.indexOf("& $new --version"), true);
+  assertEquals(
+    refusal < script.indexOf("[IO.Directory]::Move($unpack, $install)"),
+    true,
+  );
+});
 
 Deno.test("standard bootstrap skips host-wide work and protects the profile keys", () => {
   const script = renderBootstrapScript({

@@ -50,7 +50,17 @@ identity only to inspect the target account's admission policy.
 Run `setup` to apply the plan and check the resulting connection. Set
 `temporary: true` for a scratch machine entry. The transport stores its wrapper
 and pinned known_hosts file under `~/.config/herdr-windows/<machineName>/` by
-default and ignores global and user SSH configuration.
+default and ignores global and user SSH configuration. The wrapper replaces hc
+0.1.22's relative Windows connect probe with the installed executable's absolute
+path. The relative probe depends on sshd's starting directory.
+
+On hc 0.1.22, `hc machine add --install` refuses Windows targets reached through
+`--via`. The fallback downloads the x64 release for the local hc version from
+the official, versioned release manifest over HTTPS. It checks the archive
+SHA-256 for integrity. Before running or installing the unpacked executable, it
+requires Windows Authenticode status `Valid` and the exact signer subject
+`CN=herdr, O=herdr, L=Wilmington, S=Delaware, C=US`. This check uses Windows
+certificate trust in addition to the checksum supplied by the release host.
 
 When an old source restriction causes `needs_login`, supply the working
 bootstrap identity so setup can repair the client key line and verify that the
@@ -68,10 +78,21 @@ inspected with these methods.
 Run `teardown` with `confirm` set to the exact machine name. It forgets the
 local registration, backs up the Windows keys file before removing the client
 key, and removes its local wrapper and known_hosts file. The Windows core and
-its terminals continue running by default. Set `uninstall: true` to stop the
-core and remove the per-user Herdr installation. Keep a separate bootstrap
-identity available if you may need to retry after the client key has been
-removed.
+its terminals continue running by default. Setting `uninstall: true` stops the
+core, **ends all Herdr terminals for every client of that machine**, and removes
+the per-user Herdr installation. Use it only on a machine this client alone
+uses. Keep a separate bootstrap identity available if you may need to retry
+after the client key has been removed.
+
+Each change to an existing keys file leaves a `<keys>.herdr-<id>.bak` backup
+beside it. Backups contain public keys only and have the same restricted ACL.
+They accumulate without automatic pruning, including during teardown. Set
+`$keys` to the Windows authorized keys file path and list its backups in
+PowerShell.
+
+```powershell
+Get-ChildItem -LiteralPath (Split-Path -Parent $keys) -Filter "$(Split-Path -Leaf $keys).herdr-*.bak"
+```
 
 ## CLI examples
 

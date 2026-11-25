@@ -1139,14 +1139,9 @@ async function stageWrapper(g: Globals, expected: string, known: string) {
   await atomicWrite(loc.wrapper, expected, 0o700);
 }
 
-async function releaseInstall(
-  access: RemoteAccess,
-  localVersion: string,
-  signal?: AbortSignal,
-) {
-  // The versioned official manifest supplies the SHA-256 of the Windows zip.
-  const result = await access(
-    `${psStart}
+/** Render the verified Windows release installer for the requested hc version. */
+export function renderReleaseInstallScript(localVersion: string): string {
+  return `${psStart}
 $origin = 'https://releases.herdr.dev'
 $version = ${psQuote(version.parse(localVersion))}
 $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
@@ -1170,6 +1165,10 @@ try {
   $unpack = Join-Path $tmp 'unpacked'
   Expand-Archive -LiteralPath $zip -DestinationPath $unpack
   $new = Join-Path $unpack 'herdr-core.exe'
+  $signature = Get-AuthenticodeSignature -LiteralPath $new
+  if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -cne 'CN=herdr, O=herdr, L=Wilmington, S=Delaware, C=US') {
+    throw 'The Windows release executable lacks a valid Authenticode signature from the expected Herdr signer'
+  }
   if (!(Test-Path -LiteralPath (Join-Path $unpack 'conpty\\conpty.dll'))) { throw 'Incomplete ConPTY release' }
   if ((& $new --version) -ne "hc $version" -or $LASTEXITCODE) { throw 'Windows release version mismatch' }
   if (Test-Path -LiteralPath $install) { throw 'Install directory already exists' }
@@ -1179,7 +1178,16 @@ try {
     [Environment]::SetEnvironmentVariable('Path', ((@($path,$install) | Where-Object { $_ }) -join ';'), 'User')
   }
 } finally { Remove-Item -LiteralPath $tmp -Recurse -Force }
-`,
+`;
+}
+
+async function releaseInstall(
+  access: RemoteAccess,
+  localVersion: string,
+  signal?: AbortSignal,
+) {
+  const result = await access(
+    renderReleaseInstallScript(localVersion),
     signal,
     180_000,
   );
@@ -1428,7 +1436,8 @@ async function teardown(input: z.infer<typeof teardownArgs>, context: Context) {
       signal,
     );
   }
-  if (input.uninstall && remote.version) {
+  const uninstalled = input.uninstall && !!remote.version;
+  if (uninstalled) {
     const result = await writer(
       `${psStart}
 $install = Join-Path $env:LOCALAPPDATA 'Programs\\herdr-core'
@@ -1461,7 +1470,13 @@ $path = [Environment]::GetEnvironmentVariable('Path','User')
   return save(context, "teardown", {
     machineName: g.machineName,
     keysRemoved: key.removed,
-    uninstalled: input.uninstall && !!remote.version,
+    uninstalled,
+    ...(uninstalled
+      ? {
+        warning:
+          "Uninstall ended all Herdr terminals for every client of this machine. Use it only on a machine this client alone uses.",
+      }
+      : {}),
   });
 }
 
