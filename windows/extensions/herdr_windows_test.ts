@@ -4,6 +4,7 @@ import {
   assertStringIncludes,
 } from "jsr:@std/assert@1";
 import { join } from "node:path";
+import { inflateRawSync } from "node:zlib";
 import {
   authorizedKeyLine,
   behavior,
@@ -88,7 +89,7 @@ IFS= read -r size
 body=$(cat)
 test "${"${#body}"}" = "$size" || exit 3
 test "${"${#last}"}" -lt 8191 || exit 4
-printf '%s\\n' "$size" >> ${shQuote(sshCalls)}
+printf '%s\\n' "$body" >> ${shQuote(sshCalls)}
 printf '%s\\n' ${
         shQuote(JSON.stringify({
           build: 26100,
@@ -129,6 +130,11 @@ printf '%s\\n' ${
 
     globals.hostKeyFingerprint = observed;
     await runSetup({ temporary: true }, context);
+    const body = (await Deno.readTextFile(sshCalls)).trim();
+    const script = new TextDecoder().decode(
+      inflateRawSync(Uint8Array.from(atob(body), (char) => char.charCodeAt(0))),
+    );
+    assertStringIncludes(script, "ConvertTo-Json -Compress");
     const wrapper = join(stateDir, "test-windows", "connect");
     const known = join(stateDir, "test-windows", "known_hosts");
     assertStringIncludes(

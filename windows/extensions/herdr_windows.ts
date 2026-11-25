@@ -1,6 +1,7 @@
 /** Windows SSH provisioning and Herdr machine management. */
 import { isIP } from "node:net";
 import { isAbsolute, join } from "node:path";
+import { deflateRawSync } from "node:zlib";
 import { z } from "npm:zod@4";
 
 const host = z.string().max(253).regex(
@@ -397,7 +398,7 @@ function Write-Keys([string] $before, [string] $after) {
   $parent = Split-Path -Parent $keys
   [IO.Directory]::CreateDirectory($parent) | Out-Null
   if ((Get-Item -LiteralPath $parent -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Refusing linked keys directory' }
-  $lock = [IO.File]::Open("$keys.herdr-lock", 'OpenOrCreate', 'ReadWrite', 'None', 4096, 'DeleteOnClose')
+  $lock = [IO.FileStream]::new("$keys.herdr-lock", 'OpenOrCreate', 'ReadWrite', 'None', 4096, 'DeleteOnClose')
   $temp = "$keys.herdr-$([Guid]::NewGuid().ToString('N')).tmp"
   try {
     if ((Read-Keys) -cne $before) { throw 'Keys file changed concurrently' }
@@ -413,7 +414,7 @@ function Write-Keys([string] $before, [string] $after) {
       $backup = "$keys.herdr-$([Guid]::NewGuid().ToString('N')).bak"
       [IO.File]::WriteAllBytes($backup, [IO.File]::ReadAllBytes($keys))
       Set-Acl -LiteralPath $backup -AclObject $acl
-      [IO.File]::Replace($temp, $keys, $null, $false)
+      [IO.File]::Replace($temp, $keys, [NullString]::Value, $false)
       Set-Acl -LiteralPath $keys -AclObject $acl
     } else { [IO.File]::Move($temp, $keys) }
     if (!(Test-KeyAcl)) { throw 'Keys ACL verification failed' }
@@ -689,7 +690,7 @@ function directSsh(
   argv.unshift("-o", lookup);
   const programs = [...(identity.sshPrefix ?? []), g.sshPath];
   return (script: string, signal?: AbortSignal, timeout?: number) => {
-    const body = base64(new TextEncoder().encode(script));
+    const body = base64(deflateRawSync(new TextEncoder().encode(script)));
     return command(
       programs[0],
       [
@@ -704,14 +705,18 @@ function directSsh(
   };
 }
 
-// Keep the command below cmd.exe's command-line limit regardless of script size.
+// Keep the launcher below cmd.exe's limit and the stdin transfer compact.
 const launcher = utf16(`
 $ErrorActionPreference = 'Stop'
 try {
   $size = [Console]::In.ReadLine()
   $payload = [Console]::In.ReadToEnd()
   if (!$payload -or $size -ne [string]$payload.Length) { throw 'Incomplete PowerShell payload' }
-  $body = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload))
+  $data = [Convert]::FromBase64String($payload)
+  $memory = New-Object IO.MemoryStream(,$data)
+  $stream = New-Object IO.Compression.DeflateStream($memory,[IO.Compression.CompressionMode]::Decompress)
+  $reader = New-Object IO.StreamReader($stream,[Text.Encoding]::UTF8)
+  try { $body = $reader.ReadToEnd() } finally { $reader.Dispose() }
   & ([ScriptBlock]::Create($body))
 } catch {
   [Console]::Error.WriteLine('Windows operation failed')
@@ -1108,9 +1113,9 @@ async function setup(input: z.infer<typeof setupArgs>, context: Context) {
         await checkedHc(
           g,
           ["machine", "update", entry.name, "--json"],
-          `Update needs operator attention. Run ${
-            [g.hcPath, "machine", "update", entry.name].map(shQuote).join(" ")
-          } in a terminal.`,
+          "The client could not update this Windows via transport. Run " +
+            "& (Join-Path $env:LOCALAPPDATA 'Programs\\herdr-core\\herdr-core.exe') update " +
+            "in PowerShell as the Windows account that owns the Herdr installation.",
           signal,
         );
         break;
