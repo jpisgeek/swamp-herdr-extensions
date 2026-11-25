@@ -413,9 +413,11 @@ function Write-Keys([string] $before, [string] $after) {
     if (Test-Path -LiteralPath $keys) {
       $backup = "$keys.herdr-$([Guid]::NewGuid().ToString('N')).bak"
       [IO.File]::WriteAllBytes($backup, [IO.File]::ReadAllBytes($keys))
-      Set-Acl -LiteralPath $backup -AclObject $acl
+      if ($isAdmin) { Set-Acl -LiteralPath $backup -AclObject $acl }
+      else { [IO.File]::SetAccessControl($backup, $acl) }
       [IO.File]::Replace($temp, $keys, [NullString]::Value, $false)
-      Set-Acl -LiteralPath $keys -AclObject $acl
+      if ($isAdmin) { Set-Acl -LiteralPath $keys -AclObject $acl }
+      else { [IO.File]::SetAccessControl($keys, $acl) }
     } else { [IO.File]::Move($temp, $keys) }
     if (!(Test-KeyAcl)) { throw 'Keys ACL verification failed' }
   } finally {
@@ -426,7 +428,43 @@ function Write-Keys([string] $before, [string] $after) {
 `;
 const adminAcl =
   "$sids = @('S-1-5-18', 'S-1-5-32-544')\n$owner = 'S-1-5-32-544'";
-const userAcl = "$owner = $identity.User.Value\n$sids = @('S-1-5-18', $owner)";
+const userAcl =
+  "$owner = $identity.User.Value\n$sids = @('S-1-5-18', 'S-1-5-32-544', $owner)";
+const standardDirectoryAcl = `
+$parent = Split-Path -Parent $keys
+[IO.Directory]::CreateDirectory($parent) | Out-Null
+if ((Get-Item -LiteralPath $parent -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+  throw 'Refusing linked keys directory'
+}
+$acl = New-Object Security.AccessControl.DirectorySecurity
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($sid in $sids) {
+  $rule = New-Object Security.AccessControl.FileSystemAccessRule(
+    (New-Object Security.Principal.SecurityIdentifier($sid)),
+    'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+  $acl.AddAccessRule($rule)
+}
+$acl.SetOwner($identity.User)
+[IO.Directory]::SetAccessControl($parent, $acl)
+`;
+const standardFingerprint = `
+$scan = Get-Command ssh-keyscan.exe -ErrorAction SilentlyContinue
+if ($scan) {
+  $ErrorActionPreference = 'Continue'
+  try { $keysOffered = @(& $scan.Source -T 5 -t ed25519 127.0.0.1 2>$null) }
+  finally { $ErrorActionPreference = 'Stop'; $global:LASTEXITCODE = 0 }
+  foreach ($offered in $keysOffered) {
+    if ($offered -cmatch '^[^ ]+ ssh-ed25519 ([A-Za-z0-9+/]+={0,2})$') {
+      $sha = [Security.Cryptography.SHA256]::Create()
+      try { $digest = $sha.ComputeHash([Convert]::FromBase64String($Matches[1])) }
+      finally { $sha.Dispose() }
+      Write-Output ('SHA256:' + [Convert]::ToBase64String($digest).TrimEnd('='))
+      return
+    }
+  }
+}
+Write-Warning 'Could not observe the SSH host fingerprint on loopback. Verify it with an administrator.'
+`;
 const keyContext = `if ($isAdmin) {
   $keys = ${adminKeys}
   ${adminAcl}
@@ -471,14 +509,17 @@ Start-Service -Name sshd
 if (!(Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue)) {
   New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22 | Out-Null
 } else { Enable-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' }`
-      : "if ((Get-Service -Name sshd).Status -ne 'Running') { throw 'An administrator must enable sshd and open TCP 22 first' }"
+      : "Write-Output 'Skipping sshd and firewall changes. An administrator must enable sshd and open TCP 22.'"
   }
 $keys = ${admin ? adminKeys : userKeys}
 ${admin ? adminAcl : userAcl}
 # Reset inheritance (/inheritance:r); use exact SID ACLs, equivalent to the
 # required full-access grants ${
-    admin ? "*S-1-5-18:F and *S-1-5-32-544:F" : "for the user and SYSTEM"
+    admin
+      ? "*S-1-5-18:F and *S-1-5-32-544:F"
+      : "for the user, SYSTEM and Administrators"
   }.
+${admin ? "" : standardDirectoryAcl}
 ${aclFunctions}
 $before = Read-Keys
 $line = ${line}
@@ -510,8 +551,12 @@ if (!$found) {
   [void]$after.Append($line + $eol)
 }
 Write-Keys $before ($after.ToString())
-& ssh-keygen -lf (Join-Path $env:ProgramData 'ssh\\ssh_host_ed25519_key.pub')
-if ($LASTEXITCODE) { throw 'Could not read the SSH host fingerprint' }
+${
+    admin
+      ? `& ssh-keygen -lf (Join-Path $env:ProgramData 'ssh\\ssh_host_ed25519_key.pub')
+if ($LASTEXITCODE) { throw 'Could not read the SSH host fingerprint' }`
+      : standardFingerprint
+  }
 `;
 }
 

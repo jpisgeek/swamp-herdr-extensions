@@ -10,12 +10,37 @@ import {
   behavior,
   classifyRemoteLine,
   fingerprint,
+  renderBootstrapScript,
   shQuote,
 } from "./herdr_windows.ts";
 
 const key =
   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGV1K2ZLpIKGtS1ULVwlvdP1Q2kFqYn9+jfNIHVSzFJd";
 const networks = ["192.0.2.0/24"];
+
+Deno.test("standard bootstrap skips host-wide work and protects the profile keys", () => {
+  const script = renderBootstrapScript({
+    clientPublicKey: key,
+    allowFrom: networks,
+    account: "standard",
+  });
+  assertStringIncludes(script, "Skipping sshd and firewall changes");
+  assertEquals(
+    /Get-Service|Set-Service|Start-Service|FirewallRule|WindowsCapability/.test(
+      script,
+    ),
+    false,
+  );
+  assertStringIncludes(script, "DirectorySecurity");
+  assertStringIncludes(
+    script,
+    "[IO.Directory]::SetAccessControl($parent, $acl)",
+  );
+  assertStringIncludes(script, "@('S-1-5-18', 'S-1-5-32-544', $owner)");
+  assertStringIncludes(script, "Write-Keys $before");
+  assertStringIncludes(script, "ssh-keyscan.exe");
+  assertStringIncludes(script, "-T 5 -t ed25519 127.0.0.1");
+});
 
 Deno.test("setup pins the host, preserves healthy state, and reports manual update", async () => {
   const dir = await Deno.makeTempDir();

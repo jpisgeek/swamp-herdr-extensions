@@ -21,12 +21,12 @@ adds no Windows core autostart entry.
 4. If SSH needs to be configured, run `bootstrapScript` with
    `account: administrator` or `account: standard` and paste the returned script
    into Windows PowerShell. The administrator script enables the OpenSSH server
-   and TCP 22 and sets the shared administrators key file. For a standard user,
-   have an administrator enable sshd and the firewall first, then run the script
-   as the target user to update that user's key file. If SSH has never been
-   enabled, bootstrap can render the script using a syntactically valid
-   placeholder fingerprint. Replace the placeholder with the console fingerprint
-   before connecting.
+   and TCP 22 and sets the shared administrators key file. Run the standard
+   script as the target user. It secures that user's key file and its directory,
+   prints the host fingerprint, and leaves sshd and firewall setup to an
+   administrator. If SSH has never been enabled, bootstrap can render the script
+   using a syntactically valid placeholder fingerprint. Replace the placeholder
+   with the console fingerprint before connecting.
 
 ## Connect and check status
 
