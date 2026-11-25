@@ -1,12 +1,17 @@
 # Plan: `@jpisgeek/herdr-windows`, herdr-core on a Windows machine
 
-Status: ready for implementation, **revision 1** · Owner of plan and acceptance tests: reviewer · Implementer: assigned worker
+Status: ready for implementation, **revision 2** · Owner of plan and acceptance tests: reviewer · Implementer: assigned worker
 
 Revision 1 (2026-11-25): live step 4 is rewritten. On hc 0.1.22, `hc machine add` does not persist an entry that
 fails to log in, so the stale pin is now replayed on an existing entry by dropping its live connection. Also
 settled: `hc machine update` refuses a Windows `--via` machine without a TTY and gives a manual-install hint.
 `update` must surface that hint verbatim as its result (`status: manual`, with the exact command) rather than
 fail. The acceptance tests are unchanged.
+
+Revision 2 (2026-11-25): live step 8 runs PowerShell Direct as the standard user (member of Remote Management
+Users only). The standard-account bootstrap must not need elevation: when it is not elevated it skips the sshd
+and firewall changes with a message, and still writes the user's keys file and prints the fingerprint. The
+acceptance tests are unchanged.
 
 ## Goal
 
@@ -123,8 +128,22 @@ client machine. The machine name is `e2e-*`, added with `--temp` semantics where
 6. `adopt` on a second machine entry added by hand through a hand-written wrapper → recorded, drift reported,
    nothing changed.
 7. `teardown` with `confirm` → hc entry gone, key line gone (other lines byte-identical), state directory gone.
-8. `bootstrapScript` output pasted (via `guestExec`) into a second fresh guest as a standard, non-admin user →
-   key in that user's `.ssh\authorized_keys`, ACL correct, login works.
+8. Standard-user bootstrap on the second fresh guest. The harness is PowerShell Direct **as that user**: no child
+   process launched from an admin session, no scheduled task.
+   1. As Administrator (`guestExec`): create local user `e2e-std` with a generated password from the `e2e`
+      vault, and add it to **Remote Management Users** (`S-1-5-32-580`) only, never Administrators. This group
+      is what lets a non-admin open a PowerShell Direct session.
+   2. `guestExec` with `user: e2e-std` → `whoami /groups` shows no Administrators SID, and `$env:USERPROFILE`
+      exists (the first PowerShell Direct logon creates the profile).
+   3. Run the `account: "standard"` `bootstrapScript` in that session. The non-elevated path writes
+      `%USERPROFILE%\.ssh\authorized_keys` with the client key line and ACL, and prints the host key
+      fingerprint. It **skips** the sshd and firewall changes with a message that an administrator must make
+      them. On this guest they are already in place from first boot.
+   4. Readback as Administrator: exactly one line for the client key, with the requested `from=`; the file and
+      its `.ssh` folder are owned by and limited to e2e-std, SYSTEM and Administrators.
+   5. SSH as `e2e-std` with the client key → `whoami` returns e2e-std.
+   If step 8.2 shows PowerShell Direct refusing a non-admin member of Remote Management Users on this build,
+   stop and report the exact error. Don't switch to another launch path.
 
 ### Things the implementer must establish with evidence, not assume
 
